@@ -71,7 +71,8 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "shield_bar": {
                 "enabled": true,
@@ -116,7 +117,8 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "overlay": {
                 "enabled": true
@@ -127,7 +129,7 @@
                 "enabled": true
             },
             "ocr": {
-                "enabled": false,
+                "enabled": true,
                 "port": 1395
             },
             "multi_character": {

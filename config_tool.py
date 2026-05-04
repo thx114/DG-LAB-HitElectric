@@ -938,7 +938,6 @@ class ConfigTool(QMainWindow):
         if max_width:
             line_edit.setMaximumWidth(max_width)
         elif field_type == "number":
-            line_edit.setMaxLength(4)
             line_edit.setMaximumWidth(50)
 
         value = self.get_config_value(config_path)
