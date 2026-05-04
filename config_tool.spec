@@ -3,10 +3,10 @@
 
 a = Analysis(
     ['config_tool.py'],
-    pathex=[],
+    pathex=[r'd:\APPS\惩罚姬\plugins\挨打就电3.1'],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=['lib'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

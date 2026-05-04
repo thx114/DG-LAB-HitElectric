@@ -10,13 +10,13 @@ import sys
 
 debug_mode = False
 
-
-
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
 
 import lib
+from config import Config
+
 name = "卡丘-挨打就电"
 author = "F_thx"
 
@@ -26,12 +26,11 @@ stop_event = None
 msg_queue = None
 server = None
 logger = None
-dxgi_available = False
 
 game_hwnd = None
 is_monitoring = False
 hwnd = None
-config = {}
+cfg = Config()
 main_loop = None
 overlay_hwnd = None
 
@@ -41,15 +40,37 @@ current_electric_strength = 0
 is_spectating = False
 has_healthbar = False
 
-# OCR 错误检测全局变量
-ocr_health_suspect = False  # 血量是否被怀疑有误
-ocr_shield_suspect = False  # 盾量是否被怀疑有误
-ocr_suspected_health_value = None  # 怀疑的血量值
-ocr_suspected_shield_value = None  # 怀疑的盾量值
-ocr_health_suspect_count = 0  # 血量怀疑连续帧数
-ocr_shield_suspect_count = 0  # 盾量怀疑连续帧数
-OCR_SUSPECT_THRESHOLD = 2  # 需要1帧连续一样才信任（降低延迟）
+multi_char_enabled = False
+active_character = 0
+target_character = -1
+character_count = 0
+character_states = {}
+switch_immunity_frames = 0
+switch_immunity_frames_config = 5
+switch_delay_frames_config = 1
+pending_switch_index = -1
+switch_delay_counter = 0
+pre_switch_health = None
+pre_switch_shield = None
+switch_value_unchanged = False
+switch_immunity_extensions = 0
+switch_max_extensions = 2
 
+prev_has_healthbar = False
+healthbar_appear_immunity = False
+character_key_codes = []
+gamepad_enabled = False
+gamepad_button_codes = []
+xinput_dll = None
+health_drop_threshold = 0
+
+ocr_health_suspect = False
+ocr_shield_suspect = False
+ocr_suspected_health_value = None
+ocr_suspected_shield_value = None
+ocr_health_suspect_count = 0
+ocr_shield_suspect_count = 0
+OCR_SUSPECT_THRESHOLD = 2
 
 overlay_text = "等待启动..."
 overlay_update_event = threading.Event()
@@ -69,16 +90,12 @@ current_strength_a = None
 current_strength_b = None
 
 electric_active_until = 0.0
-# 电击触发信息显示相关
-electric_trigger_message = ""  # 当前显示的触发信息
-electric_trigger_count = 0     # 触发次数（用于overlap叠加）
-
-cached_config = {}
+electric_trigger_message = ""
+electric_trigger_count = 0
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
 kernel32 = ctypes.windll.kernel32
-
 
 VK_F6 = 0x75
 VK_F7 = 0x76
@@ -91,61 +108,29 @@ VK_DOWN = 0x28
 VK_LEFT = 0x25
 VK_RIGHT = 0x27
 
+VK_0 = 0x30
+VK_1 = 0x31
+VK_2 = 0x32
+VK_3 = 0x33
+VK_4 = 0x34
+VK_5 = 0x35
+VK_6 = 0x36
+VK_7 = 0x37
+VK_8 = 0x38
+VK_9 = 0x39
+
+CHAR_KEY_MAP = {
+    '0': VK_0, '1': VK_1, '2': VK_2, '3': VK_3,
+    '4': VK_4, '5': VK_5, '6': VK_6, '7': VK_7,
+    '8': VK_8, '9': VK_9,
+}
+
 capture_method = "GDI"
 
 def cache_config():
-    global cached_config
-    plus_config = config.get("plus_sign", {})
-    cached_config["plus_positions"] = lib.parse_coordinates(plus_config.get("positions", []))
-    cached_config["plus_colors"] = lib.parse_colors(plus_config.get("colors", []))
-    cached_config["plus_negative_positions"] = lib.parse_coordinates(plus_config.get("negative_positions", []))
-    cached_config["plus_negative_colors"] = lib.parse_colors(plus_config.get("negative_colors", []))
-    cached_config["plus_tolerance"] = plus_config.get("tolerance", 30)
-
-    spectate_config = config.get("spectate", {})
-    cached_config["spectate_positions"] = lib.parse_coordinates(spectate_config.get("positions", []))
-    cached_config["spectate_colors"] = lib.parse_colors(spectate_config.get("colors", []))
-    cached_config["spectate_tolerance"] = spectate_config.get("tolerance", 30)
-
-    health_config = config.get("health_bar", {})
-    cached_config["health_enabled"] = health_config.get("enabled", False)
-    cached_config["health_start"] = lib.parse_coordinate(health_config.get("start", [0, 0]))
-    cached_config["health_end"] = lib.parse_coordinate(health_config.get("end", [0, 0]))
-    cached_config["health_colors"] = lib.parse_colors(health_config.get("colors", []))
-    cached_config["health_tolerance"] = health_config.get("tolerance", 30)
-    cached_config["health_sample_points"] = health_config.get("sample_points", 20)
-    cached_config["health_ocr_top_left"] = lib.parse_coordinate(health_config.get("ocr_top_left", [0, 0]))
-    cached_config["health_ocr_bottom_right"] = lib.parse_coordinate(health_config.get("ocr_bottom_right", [100, 100]))
-    # OCR专属配置：结束点检测成功后是否不触发电击
-    cached_config["health_ocr_end_trigger"] = health_config.get("ocr_end_trigger", False)
-    # OCR专属配置：数字颜色和容差（用于滤镜）
-    cached_config["health_ocr_number_color"] = lib.parse_colors(health_config.get("ocr_number_color", []))
-    cached_config["health_ocr_number_tolerance"] = health_config.get("ocr_number_tolerance", 30)
-
-    shield_config = config.get("shield_bar", {})
-    cached_config["shield_enabled"] = shield_config.get("enabled", False)
-    cached_config["shield_start"] = lib.parse_coordinate(shield_config.get("start", [0, 0]))
-    cached_config["shield_end"] = lib.parse_coordinate(shield_config.get("end", [0, 0]))
-    cached_config["shield_colors"] = lib.parse_colors(shield_config.get("colors", []))
-    cached_config["shield_tolerance"] = shield_config.get("tolerance", 25)
-    cached_config["shield_sample_points"] = shield_config.get("sample_points", 12)
-    cached_config["shield_ocr_top_left"] = lib.parse_coordinate(shield_config.get("ocr_top_left", [0, 0]))
-    cached_config["shield_ocr_bottom_right"] = lib.parse_coordinate(shield_config.get("ocr_bottom_right", [100, 100]))
-    # OCR专属配置：结束点检测成功后是否不触发电击
-    cached_config["shield_ocr_end_trigger"] = shield_config.get("ocr_end_trigger", False)
-    # 配置：盾存在时不扣血
-    cached_config["shield_blocks_health"] = shield_config.get("blocks_health", True)
-    # OCR专属配置：数字颜色和容差（用于滤镜）
-    cached_config["shield_ocr_number_color"] = lib.parse_colors(shield_config.get("ocr_number_color", []))
-    cached_config["shield_ocr_number_tolerance"] = shield_config.get("ocr_number_tolerance", 25)
-
-    overlap_config = config.get("overlap", {})
-    cached_config["overlap_strength_add"] = overlap_config.get("strength_add", 1)
-    cached_config["overlap_strength_max"] = overlap_config.get("strength_max", 200)
-
-    ocr_config = config.get("ocr", {})
-    cached_config["ocr_enabled"] = ocr_config.get("enabled", False)
-    cached_config["ocr_port"] = ocr_config.get("port", 1395)
+    global config, cached_config
+    config = cfg.plugins
+    cached_config = cfg._cache
 
 def get_pulse_duration(pulse_data):
     if isinstance(pulse_data, list):
@@ -351,6 +336,11 @@ def check_healthbar_exists(bmp_data, img_width):
     global has_healthbar
     if is_spectating:
         return False, "--------"
+
+    if not cached_config.get("plus_enabled", True):
+        has_healthbar = True
+        return True, "++++++"
+
     debug("--check_healthbar_exists--")
 
 
@@ -400,6 +390,10 @@ def check_healthbar_exists(bmp_data, img_width):
 def check_spectating(bmp_data, img_width):
     global is_spectating
     debug("--check_spectating--")
+
+    if not cached_config.get("spectate_enabled", True):
+        is_spectating = False
+        return is_spectating, "0"
 
     positions = cached_config.get("spectate_positions", [])
     colors = cached_config.get("spectate_colors", [])
@@ -480,11 +474,14 @@ def check_health_and_shield(bmp_data, img_width):
         )
         health_pct = min(health_pct, 100.0)
         if health_pct < current_health and has_healthbar:
-            if current_shield > 0:
+            drop_amount = current_health - health_pct
+            shield_blocks = cached_config.get("shield_blocks_health", True) and current_shield > 0
+            if shield_blocks:
                 current_health = health_pct
             else:
                 current_health = health_pct
-                result["health_dropped"] = True
+                if drop_amount >= health_drop_threshold:
+                    result["health_dropped"] = True
         else:
             current_health = health_pct
         result["health_color_result"] = health_color_result
@@ -519,12 +516,10 @@ def check_healthbar_ocr(bmp_data, img_width):
     x2 = ocr_bottom_right[0] - offset_x
     y2 = ocr_bottom_right[1] - offset_y
 
-    # 获取OCR滤镜配置
-    filter_colors = cached_config.get("health_ocr_number_color", [])
-    filter_tolerance = cached_config.get("health_ocr_number_tolerance", 2)
+    health_filters = cached_config.get("health_ocr_filters", [])
 
     number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
-                                                  filter_colors=filter_colors, filter_tolerance=filter_tolerance)
+                                                  filters=health_filters, parse_color_func=lib.parse_colors)
     
     if number is not None and number != 0:
         has_healthbar = True
@@ -558,14 +553,35 @@ def check_shield_ocr(bmp_data, img_width):
     x2 = ocr_bottom_right[0] - offset_x
     y2 = ocr_bottom_right[1] - offset_y
     
-    # 获取OCR滤镜配置
-    filter_colors = cached_config.get("shield_ocr_number_color", [])
-    filter_tolerance = cached_config.get("shield_ocr_number_tolerance", 2)
+    shield_filters = cached_config.get("shield_ocr_filters", [])
     
     number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
-                                                  filter_colors=filter_colors, filter_tolerance=filter_tolerance)
+                                                  filters=shield_filters, parse_color_func=lib.parse_colors)
     
     return number, ocr_time
+
+def check_bar_pixel_match(bmp_data, img_width, capture_region, bar_type, position_type):
+    """检查条形指定位置(起始/结束)的像素颜色是否匹配
+    
+    Args:
+        bar_type: 'health' 或 'shield'
+        position_type: 'start' 或 'end'
+    
+    Returns:
+        bool: 像素颜色是否匹配
+    """
+    pos = cached_config.get(f"{bar_type}_{position_type}", [0, 0])
+    colors = cached_config.get(f"{bar_type}_colors", [])
+    tolerance = cached_config.get(f"{bar_type}_tolerance", 25)
+    
+    if not pos or not colors:
+        return False
+    
+    pixel = lib.get_pixel_color(bmp_data, pos[0] - capture_region[0], pos[1] - capture_region[1], img_width)
+    for color in colors:
+        if lib.color_match(pixel, color, tolerance):
+            return True
+    return False
 
 def _send_set_strength(channel, strength):
     if server is not None and hasattr(server, 'set_strength'):
@@ -600,7 +616,7 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health"):
     # 检查是否是overlap叠加（用于强度增加）
     is_overlap = now < electric_active_until * 2
 
-    if is_overlap:
+    if is_overlap and cached_config.get("overlap_enabled", True):
         overlap_add = cached_config.get("overlap_strength_add", 1)
         overlap_max = cached_config.get("overlap_strength_max", 200)
         strength_a = min(strength_a + overlap_add, overlap_max)
@@ -655,13 +671,168 @@ def on_toggle_monitoring():
 def check_key_state(vk_code):
     return user32.GetAsyncKeyState(vk_code) & 0x8001 != 0
 
+def request_switch_character(new_index):
+    global pending_switch_index, switch_delay_counter
+    global multi_char_enabled, switch_value_unchanged
+    global switch_immunity_extensions, target_character
+
+    if not multi_char_enabled:
+        return False
+    if new_index < 0 or new_index >= character_count:
+        return False
+    if new_index == active_character:
+        return False
+    if not has_healthbar:
+        return False
+
+    if switch_value_unchanged:
+        switch_value_unchanged = False
+        target_character = -1
+        switch_immunity_extensions = 0
+        debug(f"新切换取消前次未确认切换, active_character仍为{active_character + 1}")
+
+    pending_switch_index = new_index
+    switch_delay_counter = switch_delay_frames_config
+    debug(f"请求切换到角色 {new_index + 1}, 延迟 {switch_delay_frames_config} 帧")
+    return True
+
+def execute_switch_character(new_index):
+    global switch_immunity_frames, target_character
+    global current_health, current_shield
+    global multi_char_enabled, character_states
+    global pre_switch_health, pre_switch_shield, switch_value_unchanged
+
+    if not multi_char_enabled:
+        return False
+    if new_index < 0 or new_index >= character_count:
+        return False
+    if new_index == active_character:
+        return False
+
+    character_states[active_character] = {
+        'health': current_health,
+        'shield': current_shield,
+    }
+
+    pre_switch_health = current_health
+    pre_switch_shield = current_shield
+
+    target_character = new_index
+    switch_immunity_frames = switch_immunity_frames_config
+    switch_value_unchanged = True
+    switch_immunity_extensions = 0
+
+    new_state = character_states.get(target_character, {'health': 100, 'shield': 0})
+    current_health = new_state['health']
+    current_shield = new_state['shield']
+
+    log(f"切换到角色 {target_character + 1} (血:{current_health:.0f} 盾:{current_shield:.0f}) [待确认]")
+    return True
+
 def take_screenshot(prefix="screenshot"):
     global game_hwnd
     """调用 lib.take_screenshot 进行截图"""
     return lib.take_screenshot(prefix, log_func=log, hwnd=game_hwnd)
 
+def take_debug_screenshots():
+    """F9开启监控时产出调试截图和OCR输出"""
+    global game_hwnd
+    import datetime
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    capture_region = cached_config.get("capture_region", None)
+    if not capture_region or len(capture_region) < 4:
+        game_config = config.get("game", {})
+        region_config = game_config.get("region", {})
+        top_left = lib.parse_coordinate(region_config.get("top_left", [0, 0]))
+        bottom_right = lib.parse_coordinate(region_config.get("bottom_right", [0, 0]))
+        if isinstance(top_left, list) and len(top_left) >= 2 and isinstance(bottom_right, list) and len(bottom_right) >= 2:
+            x = max(0, top_left[0])
+            y = max(0, top_left[1])
+            w = max(10, bottom_right[0] - top_left[0])
+            h = max(10, bottom_right[1] - top_left[1])
+            capture_region = [int(x), int(y), int(w), int(h)]
+    
+    if not capture_region or len(capture_region) < 4:
+        log("调试截图: 截图区域未设置")
+        return
+    
+    bmp_data, rx, ry, rw, rh, img_width = lib.capture_screen_fast(capture_region, hwnd=game_hwnd)
+    if not bmp_data or len(bmp_data) == 0:
+        log("调试截图: 截图失败，数据为空")
+        return
+    
+    base_path = os.path.abspath(os.path.dirname(__file__))
+    screenshot_dir = os.path.join(base_path, "screenshots")
+    os.makedirs(screenshot_dir, exist_ok=True)
+    
+    lib.save_screenshot_sync(bmp_data, rw, rh, f"debug_region_{timestamp}.png")
+    log(f"调试截图-区域: {os.path.join(screenshot_dir, f'debug_region_{timestamp}.png')} ({rw}x{rh})")
+    
+    full_bmp = lib.capture_screen_fast(hwnd=game_hwnd)
+    if full_bmp and len(full_bmp) > 0:
+        lib.save_screenshot_sync(full_bmp[0], full_bmp[3], full_bmp[4], f"debug_full_{timestamp}.png")
+        log(f"调试截图-全窗口: {os.path.join(screenshot_dir, f'debug_full_{timestamp}.png')} ({full_bmp[3]}x{full_bmp[4]})")
+    
+    ocr_enabled = cached_config.get("ocr_enabled", False)
+    if ocr_enabled:
+        ocr_port = cached_config.get("ocr_port", 1395)
+        
+        health_ocr_top_left = cached_config.get("health_ocr_top_left", [0, 0])
+        health_ocr_bottom_right = cached_config.get("health_ocr_bottom_right", [100, 100])
+        if isinstance(health_ocr_top_left, list) and len(health_ocr_top_left) >= 2 and isinstance(health_ocr_bottom_right, list) and len(health_ocr_bottom_right) >= 2:
+            offset_x = capture_region[0]
+            offset_y = capture_region[1]
+            x1 = health_ocr_top_left[0] - offset_x
+            y1 = health_ocr_top_left[1] - offset_y
+            x2 = health_ocr_bottom_right[0] - offset_x
+            y2 = health_ocr_bottom_right[1] - offset_y
+            
+            health_filters = cached_config.get("health_ocr_filters", [])
+            
+            ocr_image = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=health_filters, parse_color_func=lib.parse_colors)
+            if ocr_image:
+                ocr_preview_path = os.path.join(screenshot_dir, f"debug_ocr_health_{timestamp}.png")
+                try:
+                    with open(ocr_preview_path, 'wb') as f:
+                        f.write(ocr_image)
+                    log(f"调试截图-血量OCR预览: {ocr_preview_path}")
+                except Exception as e:
+                    log(f"调试截图-血量OCR预览保存失败: {e}")
+            
+            number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=health_filters, parse_color_func=lib.parse_colors)
+            log(f"调试OCR-血量: 识别结果={number}, 耗时={ocr_time:.3f}s")
+        
+        shield_enabled = cached_config.get("shield_enabled", False)
+        if shield_enabled:
+            shield_ocr_top_left = cached_config.get("shield_ocr_top_left", [0, 0])
+            shield_ocr_bottom_right = cached_config.get("shield_ocr_bottom_right", [100, 100])
+            if isinstance(shield_ocr_top_left, list) and len(shield_ocr_top_left) >= 2 and isinstance(shield_ocr_bottom_right, list) and len(shield_ocr_bottom_right) >= 2:
+                offset_x = capture_region[0]
+                offset_y = capture_region[1]
+                x1 = shield_ocr_top_left[0] - offset_x
+                y1 = shield_ocr_top_left[1] - offset_y
+                x2 = shield_ocr_bottom_right[0] - offset_x
+                y2 = shield_ocr_bottom_right[1] - offset_y
+                
+                shield_filters = cached_config.get("shield_ocr_filters", [])
+                
+                ocr_image = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=shield_filters, parse_color_func=lib.parse_colors)
+                if ocr_image:
+                    ocr_preview_path = os.path.join(screenshot_dir, f"debug_ocr_shield_{timestamp}.png")
+                    try:
+                        with open(ocr_preview_path, 'wb') as f:
+                            f.write(ocr_image)
+                        log(f"调试截图-盾量OCR预览: {ocr_preview_path}")
+                    except Exception as e:
+                        log(f"调试截图-盾量OCR预览保存失败: {e}")
+                
+                number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=shield_filters, parse_color_func=lib.parse_colors)
+                log(f"调试OCR-盾量: 识别结果={number}, 耗时={ocr_time:.3f}s")
+
 def key_monitor_loop():
     global is_monitoring, setting_mode, setting_target
+    global character_key_codes, multi_char_enabled, gamepad_enabled
 
     toggle_key_str = config.get("toggle_key", "f9").lower()
     setting_key_str = config.get("setting_mode_key", "f10").lower()
@@ -688,6 +859,11 @@ def key_monitor_loop():
     left_pressed = False
     right_pressed = False
 
+    char_key_pressed = [False] * len(character_key_codes)
+
+    gamepad_prev_buttons = 0
+    gamepad_char_pressed = [False] * len(character_key_codes)
+
     while not stop_event.is_set():
         toggle_state = check_key_state(toggle_key)
         setting_state = check_key_state(setting_key)
@@ -702,7 +878,7 @@ def key_monitor_loop():
             toggle_pressed = True
             on_toggle_monitoring()
             if is_monitoring:
-                threading.Thread(target=take_screenshot, args=("F9",), daemon=True).start()
+                threading.Thread(target=take_debug_screenshots, daemon=True).start()
         elif not toggle_state:
             toggle_pressed = False
 
@@ -760,6 +936,39 @@ def key_monitor_loop():
                 setting_event.set()
             elif not right_state:
                 right_pressed = False
+
+        if multi_char_enabled:
+            for i, vk_code in enumerate(character_key_codes):
+                if i < len(char_key_pressed):
+                    key_state = check_key_state(vk_code)
+                    if key_state and not char_key_pressed[i]:
+                        char_key_pressed[i] = True
+                        request_switch_character(i)
+                    elif not key_state:
+                        char_key_pressed[i] = False
+
+            if gamepad_enabled and gamepad_button_codes:
+                gamepad_buttons = lib.read_xinput_buttons(0)
+
+                for i in range(min(character_count, len(gamepad_button_codes))):
+                    try:
+                        btn = int(str(gamepad_button_codes[i]), 0)
+                    except Exception:
+                        continue
+                    
+                    is_pressed = (gamepad_buttons & btn) != 0
+                    was_pressed = (gamepad_prev_buttons & btn) != 0
+
+                    if is_pressed and not was_pressed:
+                        if i < len(gamepad_char_pressed):
+                            gamepad_char_pressed[i] = True
+                            request_switch_character(i)
+
+                    if not is_pressed:
+                        if i < len(gamepad_char_pressed):
+                            gamepad_char_pressed[i] = False
+
+                gamepad_prev_buttons = gamepad_buttons
 
         time.sleep(0.02)
 
@@ -855,6 +1064,23 @@ def create_overlay_window():
             healthbar_status = 'yes' if has_healthbar else 'no'
             spectating_status = 'yes' if is_spectating else 'no'
 
+            char_info = ""
+            if multi_char_enabled:
+                if switch_value_unchanged and target_character >= 0:
+                    char_info = f" 角色{active_character+1}→{target_character+1}/{character_count}"
+                else:
+                    char_info = f" 角色{active_character+1}/{character_count}"
+                if pending_switch_index >= 0:
+                    char_info += f"[延迟{switch_delay_counter}]"
+                if switch_immunity_frames > 0:
+                    char_info += f"[免疫{switch_immunity_frames}]"
+                if switch_value_unchanged:
+                    char_info += "[待确认]"
+                if switch_immunity_extensions > 0:
+                    char_info += f"[延长{switch_immunity_extensions}]"
+                if healthbar_appear_immunity:
+                    char_info += "[出现免疫]"
+
             try:
                 last_capture_time = getattr(monitoring_loop, 'last_capture_time', 0)
             except:
@@ -884,9 +1110,9 @@ def create_overlay_window():
 
             # 构建延迟显示字符串（ocr_total_time是秒，需要转换为毫秒）
             if ocr_total_time > 0:
-                delay_str = f"{last_capture_time:.1f}ms + {ocr_total_time*1000:.0f}ms(ocr) + {last_loop_time:.1f}ms(loop)"
+                delay_str = f"{last_capture_time:.1f}ms + {ocr_total_time*1000:.0f}ms(ocr)"
             else:
-                delay_str = f"{last_capture_time:.1f}ms + {last_loop_time:.1f}ms(loop)"
+                delay_str = f"{last_capture_time:.1f}ms"
             
             # 检查是否显示触发信息（在 electric_active_until 时间内显示）
             global electric_trigger_message, electric_active_until
@@ -897,7 +1123,7 @@ def create_overlay_window():
                 # 过期后清空触发信息
                 electric_trigger_message = ""
             
-            status_line = f"[{capture_method}] 血条:{healthbar_status} 观战:{spectating_status} 血:{health_val:.0f} 盾:{shield_val:.0f} 延迟:{delay_str}{trigger_info}"
+            status_line = f"[{capture_method}] 血条:{healthbar_status} 观战:{spectating_status} 血:{health_val:.0f} 盾:{shield_val:.0f}{char_info} 延迟:{delay_str}{trigger_info}"
             detail_line = f"| {plus_result},{spectate_result},{health_color_result},{shield_color_result} "
             strength_line = f"| {parts[0]} {parts[1]} | {parts[2]} {parts[3]} |"
 
@@ -928,6 +1154,12 @@ key_monitor_thread = None
 
 async def monitoring_loop():
     global current_health, current_shield, game_hwnd, last_loop_time
+    global switch_immunity_frames, prev_has_healthbar, healthbar_appear_immunity
+    global multi_char_enabled, active_character, character_states, target_character
+    global pending_switch_index, switch_delay_counter, switch_value_unchanged
+    global pre_switch_health, pre_switch_shield
+    global switch_immunity_extensions
+    global health_drop_threshold
     scan_interval = config.get("scan_interval", 0.1)
 
     game_config = config.get("game", {})
@@ -970,14 +1202,7 @@ async def monitoring_loop():
 
         try:
             t1 = time.time()
-            bmp_data = None
-            if dxgi_available:
-                bmp_data = lib.capture_screen_dxgi(capture_region)
-            if bmp_data is None:
-                bmp_data, rx, ry, rw, rh, img_width = lib.capture_screen_fast(capture_region,hwnd=game_hwnd)
-            else:
-                rx, ry, rw, rh = capture_region[0], capture_region[1], capture_region[2], capture_region[3]
-                img_width = rw
+            bmp_data, rx, ry, rw, rh, img_width = lib.capture_screen_fast(capture_region, hwnd=game_hwnd)
             current_capture_time = (time.time() - t1) * 1000
             monitoring_loop.last_capture_time = current_capture_time
 
@@ -999,128 +1224,88 @@ async def monitoring_loop():
                     has_healthbar, health_number, health_ocr_time = check_healthbar_ocr(bmp_data, img_width)
                     ocr_total_time += health_ocr_time
                     
+                    pre_detected_shield = None
+                    if not has_healthbar and cached_config.get("ocr_health_shield_detect", False) and cached_config.get("shield_enabled", False):
+                        shield_number, shield_ocr_time = check_shield_ocr(bmp_data, img_width)
+                        ocr_total_time += shield_ocr_time
+                        if shield_number is not None and shield_number != 0:
+                            has_healthbar = True
+                            pre_detected_shield = shield_number
+                            debug(f"血量OCR未识别到，但盾量OCR识别到{shield_number}，判定血条存在")
+                    
+                    if multi_char_enabled and has_healthbar and not prev_has_healthbar:
+                        healthbar_appear_immunity = True
+                        debug("血条突然出现(OCR)，1帧免疫电击")
+                    
                     monitoring_loop.plus_result = "OCR"
-                    monitoring_loop.ocr_total_time = ocr_total_time  # 保存OCR延迟用于显示
+                    monitoring_loop.ocr_total_time = ocr_total_time
                     
                     if has_healthbar:
-                        # 先处理盾条（如果启用）
+                        # 处理盾条
                         if cached_config.get("shield_enabled", False):
-                            # 检查盾起始位置是否存在（OCR模式下）
-                            shield_start = cached_config.get("shield_start", [0, 0])
-                            shield_colors = cached_config.get("shield_colors", [])
-                            shield_tolerance = cached_config.get("shield_tolerance", 25)
-                            shield_start_exists = False
-                            if shield_start and shield_colors:
-                                start_pixel = lib.get_pixel_color(bmp_data, shield_start[0] - capture_region[0], shield_start[1] - capture_region[1], img_width)
-                                for color in shield_colors:
-                                    if lib.color_match(start_pixel, color, shield_tolerance):
-                                        shield_start_exists = True
-                                        break
+                            shield_number = None
                             
-                            if shield_start_exists:
-                                # 盾起始存在，进行OCR识别
+                            if pre_detected_shield is not None:
+                                shield_number = pre_detected_shield
+                            else:
                                 shield_number, shield_ocr_time = check_shield_ocr(bmp_data, img_width)
                                 ocr_total_time += shield_ocr_time
-                                
-                                # 使用OCR错误检测系统验证盾量
-                                if shield_number is not None:
-                                    shield_valid, validated_shield = validate_ocr_value('shield', shield_number, current_shield)
-                                    if shield_valid:
-                                        # 先检查是否需要触发（使用验证后的值与之前的值比较）
-                                        if validated_shield < current_shield:
-                                            # OCR专属配置：是否检测结束点
-                                            shield_ocr_end_trigger = cached_config.get("shield_ocr_end_trigger", True)
-                                            should_trigger = True
-                                            
-                                            if shield_ocr_end_trigger:
-                                                # 检查盾条结束点颜色
-                                                shield_end = cached_config.get("shield_end", [0, 0])
-                                                shield_end_color_match = False
-                                                if shield_end and shield_colors:
-                                                    end_pixel = lib.get_pixel_color(bmp_data, shield_end[0] - capture_region[0], shield_end[1] - capture_region[1], img_width)
-                                                    for color in shield_colors:
-                                                        if lib.color_match(end_pixel, color, shield_tolerance):
-                                                            shield_end_color_match = True
-                                                            break
-                                                # 结束点颜色存在时不触发电击
-                                                should_trigger = not shield_end_color_match
-                                            
-                                            if should_trigger:
+                            
+                            if shield_number is not None:
+                                shield_valid, validated_shield = validate_ocr_value('shield', shield_number, current_shield)
+                                if shield_valid:
+                                    if validated_shield < current_shield:
+                                        should_trigger = True
+                                        if cached_config.get("shield_ocr_end_trigger", True):
+                                            should_trigger = not check_bar_pixel_match(bmp_data, img_width, capture_region, "shield", "end")
+                                        if should_trigger:
+                                            if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
+                                                debug(f"盾条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
+                                            else:
                                                 await trigger_electric_shield(
                                                     strength_a=strength_values["shield_a"],
                                                     strength_b=strength_values["shield_b"]
                                                 )
-                                        # 然后更新当前盾量
-                                        current_shield = max(0, validated_shield)
-                                    monitoring_loop.shield_color_result = str(validated_shield) if validated_shield else "0"
-                                else:
-                                    monitoring_loop.shield_color_result = "0"
+                                    current_shield = max(0, validated_shield)
+                                monitoring_loop.shield_color_result = str(validated_shield) if validated_shield else "0"
                             else:
-                                # 盾起始不存在，盾值直接为0，覆盖OCR识别
-                                current_shield = 0
                                 monitoring_loop.shield_color_result = "0"
                         else:
                             monitoring_loop.shield_color_result = "0"
                             current_shield = 0
                         
-                        # 处理血量：只有盾为0时才进行OCR错误检测和触发电击
-                        if True:
-                            # 使用OCR错误检测系统验证血量
-                            if health_number is not None:
-                                health_valid, validated_health = validate_ocr_value('health', health_number, current_health)
-                                if health_valid:
-                                    # 先检查是否需要触发（使用验证后的值与之前的值比较）
-                                    if validated_health < current_health:
-                                        # OCR专属配置：是否检测结束点
-                                        health_ocr_end_trigger = cached_config.get("health_ocr_end_trigger", True)
-                                        should_trigger = True
-                                        
-                                        if health_ocr_end_trigger:
-                                            # 检查血条结束点颜色
-                                            health_end = cached_config.get("health_end", [0, 0])
-                                            health_colors = cached_config.get("health_colors", [])
-                                            health_tolerance = cached_config.get("health_tolerance", 30)
-                                            health_end_color_match = False
-                                            if health_end and health_colors:
-                                                end_pixel = lib.get_pixel_color(bmp_data, health_end[0] - capture_region[0], health_end[1] - capture_region[1], img_width)
-                                                for color in health_colors:
-                                                    if lib.color_match(end_pixel, color, health_tolerance):
-                                                        health_end_color_match = True
-                                                        break
-                                            # 结束点颜色存在时不触发电击
-                                            should_trigger = not health_end_color_match
-                                        
-                                        if should_trigger:
+                        # 处理血量
+                        if health_number is not None:
+                            health_valid, validated_health = validate_ocr_value('health', health_number, current_health)
+                            if health_valid:
+                                if validated_health < current_health:
+                                    health_drop_amount = current_health - validated_health
+                                    should_trigger = True
+                                    shield_blocks = cached_config.get("shield_blocks_health", True) and current_shield > 0
+                                    if shield_blocks:
+                                        should_trigger = False
+                                        debug(f"盾存在时阻止血量电击 (盾={current_shield})")
+                                    if should_trigger and cached_config.get("health_ocr_end_trigger", True):
+                                        should_trigger = not check_bar_pixel_match(bmp_data, img_width, capture_region, "health", "end")
+                                    if should_trigger and health_drop_threshold > 0:
+                                        if health_drop_amount < health_drop_threshold:
+                                            should_trigger = False
+                                            debug(f"血量减少{health_drop_amount:.0f}未达阈值{health_drop_threshold}, 跳过电击")
+                                    if should_trigger:
+                                        if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
+                                            debug(f"血条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
+                                        else:
                                             await trigger_electric_health(
                                                 strength_a=strength_values["health_a"],
                                                 strength_b=strength_values["health_b"]
                                             )
-                                    # 然后更新当前血量
-                                    current_health = max(0, validated_health)
-                                monitoring_loop.health_color_result = str(validated_health) if validated_health else "0"
-                            else:
-                                monitoring_loop.health_color_result = "0"
+                                current_health = max(0, validated_health)
+                            monitoring_loop.health_color_result = str(validated_health) if validated_health else "0"
                         else:
-                            # 盾存在时，根据配置决定是否处理血量
-                            shield_blocks_health = cached_config.get("shield_blocks_health", True)
-                            if shield_blocks_health:
-                                # 直接更新血量显示，不进行错误检测和电击
-                                if health_number is not None:
-                                    current_health = max(0, health_number)
-                                monitoring_loop.health_color_result = str(health_number) if health_number else "0"
-                            else:
-                                # 仍然进行错误检测，但不触发电击
-                                if health_number is not None:
-                                    health_valid, validated_health = validate_ocr_value('health', health_number, current_health)
-                                    if health_valid:
-                                        current_health = max(0, validated_health)
-                                    monitoring_loop.health_color_result = str(validated_health) if validated_health else "0"
-                                else:
-                                    monitoring_loop.health_color_result = "0"
+                            monitoring_loop.health_color_result = "0"
                     else:
                         monitoring_loop.health_color_result = "0"
                         monitoring_loop.shield_color_result = "0"
-                        # 血条不存在时保持上一次的数值，不重置为0
                     
                     scan_interval_sec = config.get("scan_interval", 0.1)
 
@@ -1131,6 +1316,10 @@ async def monitoring_loop():
             else:
                 has_healthbar, plus_result = check_healthbar_exists(bmp_data, img_width)
                 is_spectating, spectate_result = check_spectating(bmp_data, img_width)
+
+                if multi_char_enabled and has_healthbar and not prev_has_healthbar:
+                    healthbar_appear_immunity = True
+                    debug("血条突然出现，1帧免疫电击")
 
                 monitoring_loop.plus_result = plus_result
                 monitoring_loop.spectate_result = spectate_result
@@ -1143,15 +1332,21 @@ async def monitoring_loop():
                     monitoring_loop.shield_color_result = result.get("shield_color_result", "0")
 
                     if result["health_dropped"]:
-                        await trigger_electric_health(
-                            strength_a=strength_values["health_a"],
-                            strength_b=strength_values["health_b"]
-                        )
+                        if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
+                            debug(f"血条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
+                        else:
+                            await trigger_electric_health(
+                                strength_a=strength_values["health_a"],
+                                strength_b=strength_values["health_b"]
+                            )
                     elif result["shield_dropped"]:
-                        await trigger_electric_shield(
-                            strength_a=strength_values["shield_a"],
-                            strength_b=strength_values["shield_b"]
-                        )
+                        if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
+                            debug(f"盾条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
+                        else:
+                            await trigger_electric_shield(
+                                strength_a=strength_values["shield_a"],
+                                strength_b=strength_values["shield_b"]
+                            )
                     
                 else:
                     monitoring_loop.health_color_result = "0"
@@ -1165,6 +1360,52 @@ async def monitoring_loop():
                     overlay_update_event.set()
                 except Exception as e:
                     log(f"设置悬浮窗更新事件失败{e}")
+
+            if multi_char_enabled:
+                if switch_value_unchanged and pre_switch_health is not None:
+                    detected_health = current_health
+                    detected_shield = current_shield
+                    if detected_health != pre_switch_health or detected_shield != pre_switch_shield:
+                        switch_value_unchanged = False
+                        switch_immunity_frames = max(switch_immunity_frames, 3)
+                        active_character = target_character
+                        target_character = -1
+                        log(f"切换确认: 角色{active_character + 1} (血:{detected_health:.0f} 盾:{detected_shield:.0f})")
+
+                if pending_switch_index >= 0:
+                    switch_delay_counter -= 1
+                    if switch_delay_counter <= 0:
+                        execute_switch_character(pending_switch_index)
+                        pending_switch_index = -1
+                        switch_delay_counter = 0
+
+                if switch_immunity_frames > 0 or switch_value_unchanged:
+                    saved_state = character_states.get(active_character, {'health': 100, 'shield': 0})
+                    current_health = saved_state['health']
+                    current_shield = saved_state['shield']
+
+                if switch_immunity_frames > 0:
+                    switch_immunity_frames -= 1
+                elif switch_value_unchanged and target_character >= 0:
+                    if switch_immunity_extensions < switch_max_extensions:
+                        switch_immunity_extensions += 1
+                        switch_immunity_frames = 1
+                        debug(f"免疫帧耗尽但数值未变, 延长免疫 ({switch_immunity_extensions}/{switch_max_extensions})")
+                    else:
+                        switch_value_unchanged = False
+                        target_character = -1
+                        switch_immunity_extensions = 0
+                        saved_state = character_states.get(active_character, {'health': 100, 'shield': 0})
+                        current_health = saved_state['health']
+                        current_shield = saved_state['shield']
+                        log(f"切换失败, 保持角色{active_character + 1}")
+
+                healthbar_appear_immunity = False
+                prev_has_healthbar = has_healthbar
+                character_states[active_character] = {
+                    'health': current_health,
+                    'shield': current_shield,
+                }
         except Exception as e:
             log(f"检测出错: {e}")
 
@@ -1177,6 +1418,13 @@ async def monitoring_loop():
 
 async def main(put_server, data, loggerr=None):
     global msg_queue, stop_event, PULSE_DATA, config, main_loop, is_monitoring, current_health, key_monitor_thread, server, logger, game_hwnd
+    global multi_char_enabled, character_count, character_states, character_key_codes, gamepad_enabled, active_character
+    global switch_immunity_frames, prev_has_healthbar, healthbar_appear_immunity
+    global switch_immunity_frames_config, switch_delay_frames_config
+    global pending_switch_index, switch_delay_counter, switch_value_unchanged
+    global pre_switch_health, pre_switch_shield, target_character
+    global switch_immunity_extensions
+    global health_drop_threshold, gamepad_button_codes
     server = put_server
     logger = loggerr
     msg_queue = None if hasattr(put_server, 'set_strength') else put_server
@@ -1185,15 +1433,12 @@ async def main(put_server, data, loggerr=None):
     stop_event = asyncio.Event()
     main_loop = asyncio.get_event_loop()
     
-    if data is None:
-        log("错误: 未获取到配置文件数据，请检查插件是否正确加载")
-        config = {}
-        PULSE_DATA = {}
-    else:
-        config = data.get("plugins", {})
-        PULSE_DATA = data.get("waveform")
-        if not config:
-            log("警告: 插件配置为空，将使用默认配置")
+    config_path = os.path.join(_plugin_dir, "config.json")
+    cfg.load(config_path)
+
+    config = cfg.plugins
+    cached_config = cfg._cache
+    PULSE_DATA = cfg.waveform
 
     global strength_values
     strength_values["health_a"] = config.get("health_bar", {}).get("strength", 24)
@@ -1201,12 +1446,60 @@ async def main(put_server, data, loggerr=None):
     strength_values["shield_a"] = config.get("shield_bar", {}).get("strength", 20)
     strength_values["shield_b"] = config.get("shield_bar", {}).get("strength_b", 20)
 
+    health_drop_threshold = config.get("health_bar", {}).get("drop_threshold", 0)
+
     cache_config()
+
+    multi_char_enabled = cached_config.get("multi_char_enabled", False)
+    gamepad_enabled = cached_config.get("gamepad_enabled", True)
+    character_keys_str = cached_config.get("character_keys_str", "1,2,3")
+
+    if multi_char_enabled:
+        key_strs = [k.strip() for k in character_keys_str.split(',') if k.strip()]
+        character_key_codes = []
+        for ks in key_strs:
+            vk = CHAR_KEY_MAP.get(ks)
+            if vk is not None:
+                character_key_codes.append(vk)
+        character_count = len(character_key_codes)
+        character_states = {}
+        for i in range(character_count):
+            character_states[i] = {'health': 100, 'shield': 0}
+        active_character = 0
+        target_character = -1
+        switch_immunity_frames = 0
+        switch_immunity_frames_config = cached_config.get("switch_immunity_frames", 5)
+        switch_delay_frames_config = cached_config.get("switch_delay_frames", 1)
+        pending_switch_index = -1
+        switch_delay_counter = 0
+        switch_value_unchanged = False
+        switch_immunity_extensions = 0
+        pre_switch_health = None
+        pre_switch_shield = None
+        prev_has_healthbar = False
+        healthbar_appear_immunity = False
+
+        gamepad_buttons_str = cached_config.get("gamepad_buttons_str", "0x1000,0x2000,0x4000,0x8000")
+        gamepad_button_codes = []
+        for btn_str in gamepad_buttons_str.split(','):
+            btn_str = btn_str.strip()
+            if btn_str:
+                try:
+                    gamepad_button_codes.append(int(btn_str, 16))
+                except ValueError:
+                    log(f"手柄按钮码无效: {btn_str}")
+
+        log(f"多角色模式已启用 | 角色数: {character_count} | 按键: {key_strs} | 手柄: {'开' if gamepad_enabled else '关'} | 手柄按钮: {[hex(b) for b in gamepad_button_codes]} | 免疫帧: {switch_immunity_frames_config} | 延迟帧: {switch_delay_frames_config}")
+    else:
+        character_count = 0
+        character_key_codes = []
+        character_states = {}
+        log("多角色模式未启用")
 
     ocr_enabled = cached_config.get("ocr_enabled", False)
     if ocr_enabled:
         log("OCR模式已启用，正在启动OCR服务端...")
-        ocr_port = config.get("ocr_port", 1395)
+        ocr_port = cached_config.get("ocr_port", 1395)
         lib.set_ocr_port(ocr_port)
         if lib.check_ocr_server(ocr_port):
             log("OCR服务端已启动")
@@ -1214,13 +1507,7 @@ async def main(put_server, data, loggerr=None):
             log("警告: OCR服务端启动失败，将回退到传统检测模式")
             cached_config["ocr_enabled"] = False
 
-    global capture_method
-    if lib.try_init_dxgi():
-        capture_method = "DXGI"
-        dxgi_available = True
-    else:
-        capture_method = "GDI"
-    log(f"插件已启动 | 截图方式: {capture_method}")
+    log("插件已启动 | 截图方式: GDI")
 
     gameTitle = config.get("game", {}).get("process_title", "QQ")
 

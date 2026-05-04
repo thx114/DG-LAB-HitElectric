@@ -1,0 +1,130 @@
+{
+    "config": {
+        "plugins": {
+            "toggle_key": "f9",
+            "setting_mode_key": "f10",
+            "overlay_toggle_key": "f6",
+            "scan_interval": 0.1,
+            "log": false,
+            "game": {
+                "process_exeName": "Calabiyau-Win64-Shipping.exe",
+                "process_title": "异环",
+                "region": {
+                    "top_left": [
+                        1072,
+                        1489
+                    ],
+                    "bottom_right": [
+                        1490,
+                        1531
+                    ]
+                }
+            },
+            "plus_sign": {
+                "positions": "147, 1450",
+                "colors": "#EEEEEE",
+                "negative_positions": "137, 1445 | 163, 1471",
+                "negative_colors": "#EEEEEE | #EEEEEE",
+                "tolerance": 15
+            },
+            "spectate": {
+                "positions": [
+                    1123,
+                    1489
+                ],
+                "colors": "#FF0000",
+                "tolerance": 1
+            },
+            "health_bar": {
+                "enabled": true,
+                "start": [
+                    1090,
+                    1508
+                ],
+                "end": [
+                    1467,
+                    1508
+                ],
+                "colors": "#FFFFFF",
+                "tolerance": 10,
+                "sample_points": 25,
+                "strength": 20,
+                "strength_b": 19,
+                "ocr_top_left": [
+                    1149,
+                    1490
+                ],
+                "ocr_bottom_right": [
+                    1416,
+                    1524
+                ],
+                "ocr_number_color": "#C0C0C0",
+                "ocr_number_tolerance": 2,
+                "ocr_end_trigger": true,
+                "drop_threshold": 10
+            },
+            "shield_bar": {
+                "enabled": false,
+                "start": "147, 1416",
+                "end": "458, 1419",
+                "colors": "#CA46FF | #00FF9A | #FFD041",
+                "tolerance": 25,
+                "sample_points": 25,
+                "strength": 18,
+                "strength_b": 17,
+                "ocr_top_left": [
+                    518,
+                    1399
+                ],
+                "ocr_bottom_right": [
+                    578,
+                    1430
+                ],
+                "ocr_number_color": "#FFD041|#CA46FF",
+                "ocr_number_tolerance": 10,
+                "ocr_end_trigger": true,
+                "blocks_health": true
+            },
+            "overlay": {
+                "enabled": true
+            },
+            "overlap": {
+                "strength_add": 1,
+                "strength_max": 200,
+                "enabled": true
+            },
+            "ocr": {
+                "enabled": true,
+                "port": 1395
+            },
+            "multi_character": {
+                "enabled": true,
+                "character_keys": "1,2,3,4",
+                "gamepad_enabled": true,
+                "gamepad_buttons": "0x0001,0x0008,0x0002,0x0004",
+                "switch_immunity_frames": 5,
+                "switch_delay_frames": 1
+            }
+        },
+        "waveform": {
+            "health_pulse": [
+                "1414141464646464",
+                "1414141464646464",
+                "0A0A0A0A50505050",
+                "0A0A0A0A50505050",
+                "0A0A0A0A3C3C3C3C",
+                "0A0A0A0A3C3C3C3C",
+                "0A0A0A0A28282828",
+                "0A0A0A0A28282828",
+                "0A0A0A0A14141414",
+                "0A0A0A0A0A0A0A0A"
+            ],
+            "shield_pulse": [
+                "0A0A0A0A50505050",
+                "0A0A0A0A50505050",
+                "0A0A0A0A28282828",
+                "0A0A0A0A0A0A0A0A"
+            ]
+        }
+    }
+}
