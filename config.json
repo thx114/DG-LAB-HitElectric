@@ -8,105 +8,113 @@
             "log": false,
             "game": {
                 "process_exeName": "Calabiyau-Win64-Shipping.exe",
-                "process_title": "鸣潮",
+                "process_title": "卡拉彼丘",
                 "region": {
-                    "top_left": [
-                        1059,
-                        1508
-                    ],
-                    "bottom_right": [
-                        1483,
-                        1570
-                    ]
+                    "top_left": "97, 984",
+                    "bottom_right": "1484, 1413"
                 }
             },
             "plus_sign": {
-                "positions": "80, 730",
-                "colors": "#E9EDEC",
-                "negative_positions": "73, 730 | 89, 745",
-                "negative_colors": "#E9EDEC | #E9EDEC",
+                "positions": "111, 1026",
+                "colors": "#EEEEEE",
+                "negative_positions": "102, 1026 | 120, 1046",
+                "negative_colors": "#EEEEEE | #EEEEEE",
                 "tolerance": 15,
                 "enabled": true
             },
             "spectate": {
-                "positions": "714, 745 | 717, 753 | 779, 752 | 783, 745",
+                "positions": "1007, 1050 | 1015, 1050 | 1096, 1049 | 1104, 1049",
                 "colors": "#EB4353 | #DDDDDD | #DDDDDD | #EB4353",
                 "tolerance": 25,
-                "enabled": false
+                "enabled": true
             },
             "health_bar": {
                 "enabled": true,
-                "start": [
-                    1080,
-                    1535
-                ],
-                "end": [
-                    1454,
-                    1535
-                ],
-                "colors": "#F0F0F0",
+                "start": "112, 1026",
+                "end": "345, 1025",
+                "colors": "#E9EDEC | #EEEEEE",
                 "tolerance": 10,
                 "sample_points": 25,
                 "strength": 20,
                 "strength_b": 19,
-                "ocr_number_color": "#3D3D3D",
-                "ocr_number_tolerance": 60,
+                "ocr_end_trigger": true,
                 "ocr_top_left": [
-                    1140,
-                    1528
+                    387,
+                    1016
                 ],
                 "ocr_bottom_right": [
-                    1388,
-                    1553
+                    443,
+                    1043
                 ],
-                "ocr_end_trigger": true,
-                "drop_threshold": 10,
+                "ocr_number_tolerance": 10,
+                "ocr_number_color": "#F7F7F7|#FE95BB",
+                "drop_threshold": 1,
                 "ocr_filters": [
                     {
                         "type": "replace_color",
-                        "colors": "#3D3D3D",
-                        "tolerance": 40,
+                        "colors": "#F7F7F7|#FE95BB",
+                        "tolerance": 10,
                         "parsed_colors": [
                             [
-                                61,
-                                61,
-                                61
+                                247,
+                                247,
+                                247
+                            ],
+                            [
+                                254,
+                                149,
+                                187
                             ]
-                        ],
-                        "feather": 40
+                        ]
                     },
                     {
-                        "type": "python",
-                        "code": "row_size = width * 4\nfor y in range(4):\n    start = y * row_size\n    for i in range(start, start + row_size, 4):\n        data[i] = 255\n        data[i+1] = 0\n        data[i+2] = 255\nfor y in range(height - 4, height):\n    start = y * row_size\n    for i in range(start, start + row_size, 4):\n        data[i] = 255\n        data[i+1] = 0\n        data[i+2] = 255"
+                        "type": "dilate",
+                        "iterations": 1
                     }
                 ]
             },
             "shield_bar": {
-                "enabled": false,
-                "start": "79, 712",
-                "end": "243, 713",
+                "enabled": true,
+                "start": "111, 1003",
+                "end": "345, 1001",
                 "colors": "#CA46FF | #00FF9A | #FFD041",
                 "tolerance": 25,
                 "sample_points": 25,
                 "strength": 18,
                 "strength_b": 17,
-                "ocr_number_color": "#FFD041|#CA46FF",
-                "ocr_number_tolerance": 12,
-                "ocr_top_left": [
-                    271,
-                    702
-                ],
-                "ocr_bottom_right": [
-                    299,
-                    719
-                ],
                 "ocr_end_trigger": true,
                 "blocks_health": true,
+                "ocr_top_left": [
+                    387,
+                    991
+                ],
+                "ocr_bottom_right": [
+                    434,
+                    1013
+                ],
+                "ocr_number_color": "#FFD041|#CA46FF",
+                "ocr_number_tolerance": 10,
                 "ocr_filters": [
                     {
                         "type": "replace_color",
                         "colors": "#FFD041|#CA46FF",
-                        "tolerance": 12
+                        "tolerance": 10,
+                        "parsed_colors": [
+                            [
+                                255,
+                                208,
+                                65
+                            ],
+                            [
+                                202,
+                                70,
+                                255
+                            ]
+                        ]
+                    },
+                    {
+                        "type": "dilate",
+                        "iterations": 1
                     }
                 ]
             },
@@ -119,15 +127,15 @@
                 "enabled": true
             },
             "ocr": {
-                "enabled": true,
+                "enabled": false,
                 "port": 1395
             },
             "multi_character": {
-                "enabled": true,
+                "enabled": false,
                 "character_keys": "1,2,3,4",
                 "gamepad_enabled": true,
                 "gamepad_buttons": "0x0001,0x0008,0x0002,0x0004",
-                "switch_immunity_frames": 2,
+                "switch_immunity_frames": 5,
                 "switch_delay_frames": 1
             }
         },

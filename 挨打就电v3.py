@@ -8,7 +8,7 @@ import tkinter as tk
 import os
 import sys
 
-debug_mode = False
+debug_mode = True
 
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
@@ -72,7 +72,7 @@ ocr_health_suspect_count = 0
 ocr_shield_suspect_count = 0
 OCR_SUSPECT_THRESHOLD = 2
 
-overlay_text = "等待启动..."
+overlay_text = "等待启动... (使用F9启动检测)"
 overlay_update_event = threading.Event()
 
 setting_mode = False
@@ -408,40 +408,7 @@ def check_spectating(bmp_data, img_width):
 
 def detect_bar_length(bmp_data, img_width, start_pos, end_pos, bar_colors, tolerance, sample_points):
     capture_region = cached_config.get("capture_region", [0, 0, 0, 0])
-    capture_offset_x, capture_offset_y = capture_region[0], capture_region[1]
-    debug("--detect_bar_length--")
-
-    if not isinstance(start_pos, list) or len(start_pos) < 2 or not isinstance(end_pos, list) or len(end_pos) < 2:
-        return 0, "0"
-
-    sx, sy = start_pos[0] - capture_offset_x, start_pos[1] - capture_offset_y
-    ex, ey = end_pos[0] - capture_offset_x, end_pos[1] - capture_offset_y
-    sx = max(0, min(sx, capture_region[2] - 1))
-    sy = max(0, min(sy, capture_region[3] - 1))
-    ex = max(0, min(ex, capture_region[2] - 1))
-    ey = max(0, min(ey, capture_region[3] - 1))
-
-    if sx == ex:
-        points = [(sx, sy + int((ey - sy) * i / sample_points)) for i in range(sample_points + 1)]
-    else:
-        points = [(sx + int((ex - sx) * i / sample_points), sy) for i in range(sample_points + 1)]
-
-    lib.color_matches = [0] * len(bar_colors)
-    filled_count = 0
-
-    for i, (px, py) in enumerate(points):
-        if 0 <= px < capture_region[2] and 0 <= py < capture_region[3]:
-            pixel = lib.get_pixel_color(bmp_data, px, py, img_width)
-            for color_idx, color in enumerate(bar_colors):
-                if lib.color_match(pixel, color, tolerance):
-                    lib.color_matches[color_idx] += 1
-                    filled_count += 1
-                    break
-
-    percentage = (filled_count / sample_points) * 100
-    color_result = '+'.join(map(str, lib.color_matches)) if lib.color_matches else '0'
-
-    return percentage, color_result
+    return lib.detect_bar_length(bmp_data, img_width, start_pos, end_pos, bar_colors, tolerance, sample_points, capture_region)
 
 def check_health_and_shield(bmp_data, img_width):
     global current_health, current_shield
@@ -499,11 +466,11 @@ def check_healthbar_ocr(bmp_data, img_width):
     
     if not isinstance(ocr_top_left, list) or len(ocr_top_left) < 2:
         has_healthbar = False
-        return False, None, 0
+        return False, None, 0, 0
     
     if not isinstance(ocr_bottom_right, list) or len(ocr_bottom_right) < 2:
         has_healthbar = False
-        return False, None, 0
+        return False, None, 0, 0
     
     # 获取截图区域偏移
     capture_region = cached_config.get("capture_region", [0, 0, 0, 0])
@@ -517,16 +484,19 @@ def check_healthbar_ocr(bmp_data, img_width):
     y2 = ocr_bottom_right[1] - offset_y
 
     health_filters = cached_config.get("health_ocr_filters", [])
+    health_api_ip = cached_config.get("health_ocr_api_ip", "")
+    health_api_data = cached_config.get("health_ocr_api_data", "")
 
-    number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
-                                                  filters=health_filters, parse_color_func=lib.parse_colors)
+    number, ocr_time, filter_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
+                                                  filters=health_filters, parse_color_func=lib.parse_colors,
+                                                  api_ip=health_api_ip or None, api_data=health_api_data or None)
     
     if number is not None and number != 0:
         has_healthbar = True
-        return True, number, ocr_time
+        return True, number, ocr_time, filter_time
     else:
         has_healthbar = False
-        return False, None, ocr_time
+        return False, None, ocr_time, filter_time
 
 def check_shield_ocr(bmp_data, img_width):
     """使用OCR检测盾条"""
@@ -554,11 +524,14 @@ def check_shield_ocr(bmp_data, img_width):
     y2 = ocr_bottom_right[1] - offset_y
     
     shield_filters = cached_config.get("shield_ocr_filters", [])
+    shield_api_ip = cached_config.get("shield_ocr_api_ip", "")
+    shield_api_data = cached_config.get("shield_ocr_api_data", "")
     
-    number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
-                                                  filters=shield_filters, parse_color_func=lib.parse_colors)
+    number, ocr_time, filter_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=cached_config["ocr_port"],
+                                                  filters=shield_filters, parse_color_func=lib.parse_colors,
+                                                  api_ip=shield_api_ip or None, api_data=shield_api_data or None)
     
-    return number, ocr_time
+    return number, ocr_time, filter_time
 
 def check_bar_pixel_match(bmp_data, img_width, capture_region, bar_type, position_type):
     """检查条形指定位置(起始/结束)的像素颜色是否匹配
@@ -789,18 +762,21 @@ def take_debug_screenshots():
             y2 = health_ocr_bottom_right[1] - offset_y
             
             health_filters = cached_config.get("health_ocr_filters", [])
+            health_api_ip = cached_config.get("health_ocr_api_ip", "")
+            health_api_data = cached_config.get("health_ocr_api_data", "")
             
-            ocr_image = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=health_filters, parse_color_func=lib.parse_colors)
-            if ocr_image:
+            ocr_image_result = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=health_filters, parse_color_func=lib.parse_colors)
+            if ocr_image_result and ocr_image_result[0]:
                 ocr_preview_path = os.path.join(screenshot_dir, f"debug_ocr_health_{timestamp}.png")
                 try:
                     with open(ocr_preview_path, 'wb') as f:
-                        f.write(ocr_image)
+                        f.write(ocr_image_result[0])
                     log(f"调试截图-血量OCR预览: {ocr_preview_path}")
                 except Exception as e:
                     log(f"调试截图-血量OCR预览保存失败: {e}")
             
-            number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=health_filters, parse_color_func=lib.parse_colors)
+            number, ocr_time, _ = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=health_filters, parse_color_func=lib.parse_colors,
+                                                            api_ip=health_api_ip or None, api_data=health_api_data or None)
             log(f"调试OCR-血量: 识别结果={number}, 耗时={ocr_time:.3f}s")
         
         shield_enabled = cached_config.get("shield_enabled", False)
@@ -816,18 +792,21 @@ def take_debug_screenshots():
                 y2 = shield_ocr_bottom_right[1] - offset_y
                 
                 shield_filters = cached_config.get("shield_ocr_filters", [])
+                shield_api_ip = cached_config.get("shield_ocr_api_ip", "")
+                shield_api_data = cached_config.get("shield_ocr_api_data", "")
                 
-                ocr_image = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=shield_filters, parse_color_func=lib.parse_colors)
-                if ocr_image:
+                ocr_image_result = lib.crop_image_for_ocr(bmp_data, x1, y1, x2, y2, img_width, log=log, filters=shield_filters, parse_color_func=lib.parse_colors)
+                if ocr_image_result and ocr_image_result[0]:
                     ocr_preview_path = os.path.join(screenshot_dir, f"debug_ocr_shield_{timestamp}.png")
                     try:
                         with open(ocr_preview_path, 'wb') as f:
-                            f.write(ocr_image)
+                            f.write(ocr_image_result[0])
                         log(f"调试截图-盾量OCR预览: {ocr_preview_path}")
                     except Exception as e:
                         log(f"调试截图-盾量OCR预览保存失败: {e}")
                 
-                number, ocr_time = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=shield_filters, parse_color_func=lib.parse_colors)
+                number, ocr_time, _ = lib.ocr_recognize_number(bmp_data, x1, y1, x2, y2, img_width, log=log, port=ocr_port, filters=shield_filters, parse_color_func=lib.parse_colors,
+                                                                api_ip=shield_api_ip or None, api_data=shield_api_data or None)
                 log(f"调试OCR-盾量: 识别结果={number}, 耗时={ocr_time:.3f}s")
 
 def key_monitor_loop():
@@ -1100,6 +1079,7 @@ def create_overlay_window():
                 shield_color_result = getattr(monitoring_loop, 'shield_color_result', '0')
                 ocr_warning = getattr(monitoring_loop, 'ocr_warning', '')
                 ocr_total_time = getattr(monitoring_loop, 'ocr_total_time', 0)
+                filter_total_time = getattr(monitoring_loop, 'filter_total_time', 0)
             except:
                 plus_result = '00000000'
                 spectate_result = '0000'
@@ -1107,12 +1087,14 @@ def create_overlay_window():
                 shield_color_result = '0'
                 ocr_warning = ''
                 ocr_total_time = 0
+                filter_total_time = 0
 
-            # 构建延迟显示字符串（ocr_total_time是秒，需要转换为毫秒）
+            # 构建延迟显示字符串（ocr_total_time和filter_total_time是秒，需要转换为毫秒）
+            delay_str = f"{last_capture_time:.1f}ms"
+            if filter_total_time > 0:
+                delay_str += f" + {filter_total_time*1000:.1f}ms(滤镜)"
             if ocr_total_time > 0:
-                delay_str = f"{last_capture_time:.1f}ms + {ocr_total_time*1000:.0f}ms(ocr)"
-            else:
-                delay_str = f"{last_capture_time:.1f}ms"
+                delay_str += f" + {ocr_total_time*1000:.0f}ms(ocr)"
             
             # 检查是否显示触发信息（在 electric_active_until 时间内显示）
             global electric_trigger_message, electric_active_until
@@ -1208,6 +1190,7 @@ async def monitoring_loop():
 
             ocr_enabled = cached_config.get("ocr_enabled", False)
             ocr_total_time = 0
+            filter_total_time = 0
             
             if ocr_enabled:
                 # 检测观战状态（OCR模式下仍然需要）
@@ -1220,14 +1203,17 @@ async def monitoring_loop():
                     monitoring_loop.health_color_result = "0"
                     monitoring_loop.shield_color_result = "0"
                     monitoring_loop.ocr_total_time = 0
+                    monitoring_loop.filter_total_time = 0
                 else:
-                    has_healthbar, health_number, health_ocr_time = check_healthbar_ocr(bmp_data, img_width)
+                    has_healthbar, health_number, health_ocr_time, health_filter_time = check_healthbar_ocr(bmp_data, img_width)
                     ocr_total_time += health_ocr_time
+                    filter_total_time += health_filter_time
                     
                     pre_detected_shield = None
                     if not has_healthbar and cached_config.get("ocr_health_shield_detect", False) and cached_config.get("shield_enabled", False):
-                        shield_number, shield_ocr_time = check_shield_ocr(bmp_data, img_width)
+                        shield_number, shield_ocr_time, shield_filter_time = check_shield_ocr(bmp_data, img_width)
                         ocr_total_time += shield_ocr_time
+                        filter_total_time += shield_filter_time
                         if shield_number is not None and shield_number != 0:
                             has_healthbar = True
                             pre_detected_shield = shield_number
@@ -1239,6 +1225,7 @@ async def monitoring_loop():
                     
                     monitoring_loop.plus_result = "OCR"
                     monitoring_loop.ocr_total_time = ocr_total_time
+                    monitoring_loop.filter_total_time = filter_total_time
                     
                     if has_healthbar:
                         # 处理盾条
@@ -1248,8 +1235,9 @@ async def monitoring_loop():
                             if pre_detected_shield is not None:
                                 shield_number = pre_detected_shield
                             else:
-                                shield_number, shield_ocr_time = check_shield_ocr(bmp_data, img_width)
+                                shield_number, shield_ocr_time, shield_filter_time = check_shield_ocr(bmp_data, img_width)
                                 ocr_total_time += shield_ocr_time
+                                filter_total_time += shield_filter_time
                             
                             if shield_number is not None:
                                 shield_valid, validated_shield = validate_ocr_value('shield', shield_number, current_shield)

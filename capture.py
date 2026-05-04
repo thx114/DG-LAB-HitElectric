@@ -25,6 +25,35 @@ class BITMAPINFO(ctypes.Structure):
     _fields_ = [("bmiHeader", BITMAPINFOHEADER), ("bmiColors", ctypes.c_uint32 * 3)]
 
 
+def _capture_with_dc(desktop_dc, src_x, src_y, cap_w, cap_h):
+    mem_dc = None
+    bitmap = None
+    try:
+        mem_dc = ctypes.windll.gdi32.CreateCompatibleDC(desktop_dc)
+        bitmap = ctypes.windll.gdi32.CreateCompatibleBitmap(desktop_dc, cap_w, cap_h)
+        ctypes.windll.gdi32.SelectObject(mem_dc, bitmap)
+        ctypes.windll.gdi32.BitBlt(mem_dc, 0, 0, cap_w, cap_h, desktop_dc, src_x, src_y, SRCCOPY)
+
+        bmi = BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = cap_w
+        bmi.bmiHeader.biHeight = -cap_h
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        bmi.bmiHeader.biCompression = 0
+
+        buf_size = cap_w * cap_h * 4
+        BufType = ctypes.c_ubyte * buf_size
+        buf = BufType()
+        ctypes.windll.gdi32.GetDIBits(mem_dc, bitmap, 0, cap_h, buf, ctypes.byref(bmi), 0)
+        return bytes(buf)
+    finally:
+        if bitmap:
+            ctypes.windll.gdi32.DeleteObject(bitmap)
+        if mem_dc:
+            ctypes.windll.gdi32.DeleteDC(mem_dc)
+
+
 def capture_screen_fast(region=None, hwnd=None):
     if not hwnd:
         return _capture_fullscreen()
@@ -42,95 +71,41 @@ def capture_screen_fast(region=None, hwnd=None):
         client_width = max(1, client_width)
         client_height = max(1, client_height)
 
-    desktop_dc = ctypes.windll.user32.GetDC(0)
-    mem_dc = ctypes.windll.gdi32.CreateCompatibleDC(desktop_dc)
-    bitmap = ctypes.windll.gdi32.CreateCompatibleBitmap(desktop_dc, client_width, client_height)
-    ctypes.windll.gdi32.SelectObject(mem_dc, bitmap)
-    ctypes.windll.gdi32.BitBlt(mem_dc, 0, 0, client_width, client_height, desktop_dc, client_left, client_top, SRCCOPY)
+    desktop_dc = None
+    try:
+        desktop_dc = ctypes.windll.user32.GetDC(0)
 
-    if region:
-        try:
-            rx, ry, rw, rh = [int(x) for x in region]
-        except:
-            rx, ry, rw, rh = 0, 0, client_width, client_height
-        rx = max(0, rx)
-        ry = max(0, ry)
-        rw = max(1, min(rw, client_width - rx))
-        rh = max(1, min(rh, client_height - ry))
+        if region:
+            try:
+                rx, ry, rw, rh = [int(x) for x in region]
+            except:
+                rx, ry, rw, rh = 0, 0, client_width, client_height
+            rx = max(0, rx)
+            ry = max(0, ry)
+            rw = max(1, min(rw, client_width - rx))
+            rh = max(1, min(rh, client_height - ry))
 
-        mem_dc_crop = ctypes.windll.gdi32.CreateCompatibleDC(desktop_dc)
-        bitmap_crop = ctypes.windll.gdi32.CreateCompatibleBitmap(desktop_dc, rw, rh)
-        ctypes.windll.gdi32.SelectObject(mem_dc_crop, bitmap_crop)
-        ctypes.windll.gdi32.BitBlt(mem_dc_crop, 0, 0, rw, rh, mem_dc, rx, ry, SRCCOPY)
-
-        bmi = BITMAPINFO()
-        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.bmiHeader.biWidth = rw
-        bmi.bmiHeader.biHeight = -rh
-        bmi.bmiHeader.biPlanes = 1
-        bmi.bmiHeader.biBitCount = 32
-        bmi.bmiHeader.biCompression = 0
-
-        buf_size = rw * rh * 4
-        BufType = ctypes.c_ubyte * buf_size
-        buf = BufType()
-        ctypes.windll.gdi32.GetDIBits(mem_dc_crop, bitmap_crop, 0, rh, buf, ctypes.byref(bmi), 0)
-
-        ctypes.windll.gdi32.DeleteObject(bitmap_crop)
-        ctypes.windll.gdi32.DeleteDC(mem_dc_crop)
-        ctypes.windll.gdi32.DeleteObject(bitmap)
-        ctypes.windll.gdi32.DeleteDC(mem_dc)
-        ctypes.windll.user32.ReleaseDC(0, desktop_dc)
-
-        return buf, rx, ry, rw, rh, rw
-    else:
-        bmi = BITMAPINFO()
-        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.bmiHeader.biWidth = client_width
-        bmi.bmiHeader.biHeight = -client_height
-        bmi.bmiHeader.biPlanes = 1
-        bmi.bmiHeader.biBitCount = 32
-        bmi.bmiHeader.biCompression = 0
-
-        buf_size = client_width * client_height * 4
-        BufType = ctypes.c_ubyte * buf_size
-        buf = BufType()
-        ctypes.windll.gdi32.GetDIBits(mem_dc, bitmap, 0, client_height, buf, ctypes.byref(bmi), 0)
-
-        ctypes.windll.gdi32.DeleteObject(bitmap)
-        ctypes.windll.gdi32.DeleteDC(mem_dc)
-        ctypes.windll.user32.ReleaseDC(0, desktop_dc)
-
-        return buf, 0, 0, client_width, client_height, client_width
+            buf = _capture_with_dc(desktop_dc, client_left + rx, client_top + ry, rw, rh)
+            return buf, rx, ry, rw, rh, rw
+        else:
+            buf = _capture_with_dc(desktop_dc, client_left, client_top, client_width, client_height)
+            return buf, 0, 0, client_width, client_height, client_width
+    finally:
+        if desktop_dc:
+            ctypes.windll.user32.ReleaseDC(0, desktop_dc)
 
 
 def _capture_fullscreen():
     width = ctypes.windll.user32.GetSystemMetrics(0)
     height = ctypes.windll.user32.GetSystemMetrics(1)
-    hwnd_dc = ctypes.windll.user32.GetDC(0)
-    mem_dc = ctypes.windll.gdi32.CreateCompatibleDC(hwnd_dc)
-    bitmap = ctypes.windll.gdi32.CreateCompatibleBitmap(hwnd_dc, width, height)
-    ctypes.windll.gdi32.SelectObject(mem_dc, bitmap)
-    ctypes.windll.gdi32.BitBlt(mem_dc, 0, 0, width, height, hwnd_dc, 0, 0, SRCCOPY)
-
-    bmi = BITMAPINFO()
-    bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-    bmi.bmiHeader.biWidth = width
-    bmi.bmiHeader.biHeight = -height
-    bmi.bmiHeader.biPlanes = 1
-    bmi.bmiHeader.biBitCount = 32
-    bmi.bmiHeader.biCompression = 0
-
-    buf_size = width * height * 4
-    BufType = ctypes.c_ubyte * buf_size
-    buf = BufType()
-    ctypes.windll.gdi32.GetDIBits(mem_dc, bitmap, 0, height, buf, ctypes.byref(bmi), 0)
-
-    ctypes.windll.gdi32.DeleteObject(bitmap)
-    ctypes.windll.gdi32.DeleteDC(mem_dc)
-    ctypes.windll.user32.ReleaseDC(0, hwnd_dc)
-
-    return buf, 0, 0, width, height, width
+    desktop_dc = None
+    try:
+        desktop_dc = ctypes.windll.user32.GetDC(0)
+        buf = _capture_with_dc(desktop_dc, 0, 0, width, height)
+        return buf, 0, 0, width, height, width
+    finally:
+        if desktop_dc:
+            ctypes.windll.user32.ReleaseDC(0, desktop_dc)
 
 
 def capture_screen_region(left, top, width, height):
@@ -139,49 +114,13 @@ def capture_screen_region(left, top, width, height):
     height = min(height, MAX_SIZE)
 
     desktop_dc = None
-    mem_dc = None
-    bitmap = None
-
     try:
         desktop_dc = ctypes.windll.user32.GetDC(0)
-        if not desktop_dc:
-            raise Exception("无法获取屏幕 DC")
-        mem_dc = ctypes.windll.gdi32.CreateCompatibleDC(desktop_dc)
-        if not mem_dc:
-            raise Exception("无法创建内存 DC")
-        bitmap = ctypes.windll.gdi32.CreateCompatibleBitmap(desktop_dc, width, height)
-        if not bitmap:
-            raise Exception("无法创建位图")
-        ctypes.windll.gdi32.SelectObject(mem_dc, bitmap)
-        result = ctypes.windll.gdi32.BitBlt(mem_dc, 0, 0, width, height, desktop_dc, left, top, SRCCOPY)
-        if not result:
-            raise Exception("BitBlt 失败")
-
-        bmi = BITMAPINFO()
-        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
-        bmi.bmiHeader.biWidth = width
-        bmi.bmiHeader.biHeight = -height
-        bmi.bmiHeader.biPlanes = 1
-        bmi.bmiHeader.biBitCount = 32
-        bmi.bmiHeader.biCompression = 0
-
-        buf_size = width * height * 4
-        if buf_size <= 0 or buf_size > 100 * 1024 * 1024:
-            raise Exception(f"缓冲区大小无效：{buf_size}")
-        BufType = ctypes.c_ubyte * buf_size
-        buf = BufType()
-        result = ctypes.windll.gdi32.GetDIBits(mem_dc, bitmap, 0, height, buf, ctypes.byref(bmi), 0)
-        if result == 0:
-            raise Exception("GetDIBits 失败")
-        return bytes(buf)
+        buf = _capture_with_dc(desktop_dc, left, top, width, height)
+        return buf, left, top, width, height, width
     finally:
-        if bitmap:
-            ctypes.windll.gdi32.DeleteObject(bitmap)
-        if mem_dc:
-            ctypes.windll.gdi32.DeleteDC(mem_dc)
         if desktop_dc:
             ctypes.windll.user32.ReleaseDC(0, desktop_dc)
-
 
 def save_screenshot_sync(bmp_data, width, height, filename):
     base_path = os.path.abspath(os.path.dirname(__file__))

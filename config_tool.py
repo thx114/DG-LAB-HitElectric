@@ -302,6 +302,407 @@ def _v3_freq_to_period(v3_freq):
         return (v3_freq - 200) * 10 + 600
 
 
+_OCR_TARGETS = {
+    "health_bar": "血量",
+    "shield_bar": "盾量",
+}
+
+_OCR_DEFAULT_OVERRIDES = {
+    "ocr.language": "models/config_en.txt",
+    "ocr.maxSideLen": 999999,
+    "tbpu.parser": "none",
+    "data.format": "text",
+}
+
+
+class OcrAdvancedDialog(QDialog):
+    def __init__(self, parent=None, config=None):
+        super().__init__(parent)
+        self.setWindowTitle("OCR进阶配置")
+        self.setMinimumSize(600, 550)
+        self._config = config
+        self._current_target = None
+        self._option_widgets = {}
+        self._options_raw = {}
+        self._memory_cache = {}
+        self._init_ui()
+
+    def _init_ui(self):
+        layout = QVBoxLayout(self)
+
+        target_layout = QHBoxLayout()
+        target_label = QLabel("OCR目标:")
+        self.target_combo = QComboBox()
+        for key, name in _OCR_TARGETS.items():
+            self.target_combo.addItem(name, key)
+        self.target_combo.currentIndexChanged.connect(self._on_target_changed)
+        target_layout.addWidget(target_label)
+        target_layout.addWidget(self.target_combo)
+        target_layout.addStretch()
+        layout.addLayout(target_layout)
+
+        ip_layout = QHBoxLayout()
+        ip_label = QLabel("IP:")
+        ip_label.setFixedWidth(30)
+        self.ip_edit = QLineEdit()
+        self.ip_edit.setPlaceholderText("例如: 127.0.0.1 (留空则使用默认本地接口)")
+        ip_layout.addWidget(ip_label)
+        ip_layout.addWidget(self.ip_edit, stretch=1)
+        layout.addLayout(ip_layout)
+
+        port_info_layout = QHBoxLayout()
+        port_info_label = QLabel("端口: 使用OCR端口配置中的端口")
+        port_info_label.setStyleSheet("color: gray; font-size: 11px;")
+        port_info_layout.addWidget(port_info_label)
+        port_info_layout.addStretch()
+        layout.addLayout(port_info_layout)
+
+        fetch_layout = QHBoxLayout()
+        self.fetch_btn = QPushButton("获取配置项")
+        self.fetch_btn.clicked.connect(self._fetch_options)
+        self.fetch_status = QLabel("")
+        self.fetch_status.setStyleSheet("color: gray; font-size: 11px;")
+        fetch_layout.addWidget(self.fetch_btn)
+        fetch_layout.addWidget(self.fetch_status)
+        fetch_layout.addStretch()
+        layout.addLayout(fetch_layout)
+
+        self.options_scroll = QScrollArea()
+        self.options_scroll.setWidgetResizable(True)
+        self.options_container = QWidget()
+        self.options_form_layout = QVBoxLayout(self.options_container)
+        self.options_form_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.options_scroll.setWidget(self.options_container)
+        layout.addWidget(self.options_scroll, stretch=1)
+
+        hint_label = QLabel("提示: 留空IP则使用默认Umi-OCR本地接口; 点击\"获取配置项\"从服务端加载可配置选项")
+        hint_label.setStyleSheet("color: gray; font-size: 11px;")
+        hint_label.setWordWrap(True)
+        layout.addWidget(hint_label)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("完成")
+        ok_btn.clicked.connect(self._save_and_close)
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self._load_memory_cache()
+        self.target_combo.setCurrentIndex(0)
+        self._current_target = self.target_combo.currentData()
+        self._load_target(self._current_target)
+        QTimer.singleShot(100, self._auto_fetch_options)
+
+    def _load_memory_cache(self):
+        for target_key in _OCR_TARGETS:
+            if self._config:
+                plugins = self._config.get("plugins", self._config)
+                bar_config = plugins.get(target_key, {})
+            else:
+                bar_config = {}
+            ip = bar_config.get("ocr_api_ip", "")
+            raw = bar_config.get("ocr_api_data", "")
+            saved_dict = {}
+            if raw:
+                try:
+                    saved_dict = json.loads(raw) if isinstance(raw, str) else raw
+                    if not isinstance(saved_dict, dict):
+                        saved_dict = {}
+                except (json.JSONDecodeError, TypeError):
+                    saved_dict = {}
+            self._memory_cache[target_key] = {
+                "ip": ip,
+                "data": saved_dict,
+            }
+
+    def _get_port(self):
+        if not self._config:
+            return 1395
+        plugins = self._config.get("plugins", self._config)
+        ocr_config = plugins.get("ocr", {})
+        return ocr_config.get("port", 1395)
+
+    def _get_ip(self):
+        return self.ip_edit.text().strip()
+
+    def _on_target_changed(self, index):
+        self._flush_current_to_cache()
+        target_key = self.target_combo.currentData()
+        self._current_target = target_key
+        self._load_target(target_key)
+        self._auto_fetch_options()
+
+    def _flush_current_to_cache(self):
+        if self._current_target is None:
+            return
+        cache = self._memory_cache.setdefault(self._current_target, {"ip": "", "data": {}})
+        cache["ip"] = self.ip_edit.text().strip()
+        if self._option_widgets:
+            cache["data"] = self._collect_options()
+
+    def _load_target(self, target_key):
+        cache = self._memory_cache.get(target_key, {"ip": "", "data": {}})
+        self.ip_edit.setText(cache.get("ip", ""))
+        self._clear_options()
+        saved_dict = cache.get("data", {})
+        if saved_dict:
+            self._rebuild_options_from_saved(saved_dict)
+
+    def _rebuild_options_from_saved(self, saved_dict):
+        for key, value in saved_dict.items():
+            row_layout = QHBoxLayout()
+            label = QLabel(key + ":")
+            label.setFixedWidth(180)
+            label.setToolTip(key)
+            row_layout.addWidget(label)
+            if isinstance(value, bool):
+                widget = QCheckBox()
+                widget.setChecked(value)
+                widget._option_key = key
+                widget._option_type = "boolean"
+                row_layout.addWidget(widget)
+                self._option_widgets[key] = widget
+            elif isinstance(value, (int, float)):
+                widget = QLineEdit(str(value))
+                widget._option_key = key
+                widget._option_type = "number"
+                widget._is_int = isinstance(value, int)
+                row_layout.addWidget(widget, stretch=1)
+                self._option_widgets[key] = widget
+            else:
+                widget = QLineEdit(str(value))
+                widget._option_key = key
+                widget._option_type = "text"
+                row_layout.addWidget(widget, stretch=1)
+                self._option_widgets[key] = widget
+            row_layout.addStretch()
+            self.options_form_layout.addLayout(row_layout)
+
+    def _clear_options(self):
+        self._option_widgets.clear()
+        self._options_raw.clear()
+        while self.options_form_layout.count():
+            item = self.options_form_layout.takeAt(0)
+            if item.layout():
+                while item.layout().count():
+                    child = item.layout().takeAt(0)
+                    if child.widget():
+                        child.widget().deleteLater()
+            elif item.widget():
+                item.widget().deleteLater()
+
+    def _fetch_options(self):
+        self._do_fetch_options(overwrite=True)
+
+    def _auto_fetch_options(self):
+        self._do_fetch_options(overwrite=False)
+
+    def _do_fetch_options(self, overwrite=True):
+        ip = self._get_ip()
+        port = self._get_port()
+        if not ip:
+            ip = "127.0.0.1"
+        url = f"http://{ip}:{port}/api/ocr/get_options"
+        self.fetch_status.setText("正在获取...")
+        self.fetch_status.setStyleSheet("color: orange; font-size: 11px;")
+        QApplication.processEvents()
+        try:
+            import requests
+            r = requests.get(url, timeout=5)
+            if r.status_code == 200:
+                res = r.json()
+                options = res if "code" not in res else res.get("data", res)
+                if isinstance(options, dict):
+                    if not overwrite and self._option_widgets and self._has_conflict(options):
+                        reply = QMessageBox.question(
+                            self, "OCR进阶配置",
+                            "由于OCR API改变或版本更新，API配置产生变动，是否覆盖配置？",
+                            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                        )
+                        if reply == QMessageBox.StandardButton.No:
+                            self.fetch_status.setText("保持原配置")
+                            self.fetch_status.setStyleSheet("color: gray; font-size: 11px;")
+                            return
+                        else:
+                            cache = self._memory_cache.get(self._current_target, {"ip": "", "data": {}})
+                            cache["data"] = {}
+                    self._clear_options()
+                    self._build_dynamic_options(options, force_defaults=not overwrite)
+                    self.fetch_status.setText(f"获取成功 ({len(options)} 项)")
+                    self.fetch_status.setStyleSheet("color: #4CAF50; font-size: 11px;")
+                else:
+                    self.fetch_status.setText("返回格式异常")
+                    self.fetch_status.setStyleSheet("color: #F44336; font-size: 11px;")
+            else:
+                self.fetch_status.setText(f"HTTP {r.status_code}")
+                self.fetch_status.setStyleSheet("color: #F44336; font-size: 11px;")
+        except Exception as e:
+            self.fetch_status.setText(f"连接失败: {e}")
+            self.fetch_status.setStyleSheet("color: #F44336; font-size: 11px;")
+
+    def _has_conflict(self, new_options):
+        if not self._options_raw:
+            return False
+        old_keys = set(self._options_raw.keys())
+        new_keys = set(k for k, v in new_options.items() if isinstance(v, dict))
+        old_api_keys = old_keys & new_keys
+        old_override_keys = old_keys - new_keys
+        override_unexpected = [k for k in old_override_keys if k not in _OCR_DEFAULT_OVERRIDES]
+        if override_unexpected:
+            return True
+        for key in old_api_keys:
+            old_opt = self._options_raw.get(key, {})
+            new_opt = new_options.get(key, {})
+            if not isinstance(old_opt, dict) or not isinstance(new_opt, dict):
+                continue
+            if old_opt.get("type") != new_opt.get("type"):
+                return True
+            if old_opt.get("type") == "enum":
+                old_items = str(old_opt.get("optionsList", []))
+                new_items = str(new_opt.get("optionsList", []))
+                if old_items != new_items:
+                    return True
+        return False
+
+    def _build_dynamic_options(self, options, force_defaults=False):
+        cache = self._memory_cache.get(self._current_target, {"ip": "", "data": {}})
+        saved_data = cache.get("data", {})
+        if force_defaults:
+            saved_data = {}
+
+        for key, opt in options.items():
+            if not isinstance(opt, dict):
+                continue
+            self._options_raw[key] = opt
+            opt_type = opt.get("type", "text")
+            title = opt.get("title", key)
+            tooltip = opt.get("toolTip", "")
+            default_val = opt.get("default")
+
+            if key in saved_data:
+                current_val = saved_data[key]
+            elif key in _OCR_DEFAULT_OVERRIDES:
+                current_val = _OCR_DEFAULT_OVERRIDES[key]
+                if key == "ocr.language" and opt_type == "enum":
+                    options_list = opt.get("optionsList", [])
+                    available_vals = set()
+                    for item in options_list:
+                        available_vals.add(item[0] if isinstance(item, list) and len(item) >= 2 else item)
+                    if current_val not in available_vals:
+                        for candidate in ["English", "models/config_en.txt"]:
+                            if candidate in available_vals:
+                                current_val = candidate
+                                break
+            else:
+                current_val = default_val
+
+            row_layout = QHBoxLayout()
+            label = QLabel(title + ":")
+            label.setFixedWidth(180)
+            if tooltip:
+                label.setToolTip(tooltip)
+            row_layout.addWidget(label)
+
+            if opt_type == "enum":
+                widget = QComboBox()
+                options_list = opt.get("optionsList", [])
+                sel_idx = 0
+                for i, item in enumerate(options_list):
+                    val = item[0] if isinstance(item, list) and len(item) >= 2 else item
+                    disp = item[1] if isinstance(item, list) and len(item) >= 2 else str(item)
+                    widget.addItem(disp, val)
+                    if val == current_val:
+                        sel_idx = i
+                widget.setCurrentIndex(sel_idx)
+                widget._option_key = key
+                widget._option_type = "enum"
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                row_layout.addWidget(widget, stretch=1)
+                self._option_widgets[key] = widget
+            elif opt_type == "boolean":
+                widget = QCheckBox()
+                widget.setChecked(bool(current_val))
+                widget._option_key = key
+                widget._option_type = "boolean"
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                row_layout.addWidget(widget)
+                self._option_widgets[key] = widget
+            elif opt_type == "number":
+                widget = QLineEdit(str(current_val) if current_val is not None else "")
+                widget._option_key = key
+                widget._option_type = "number"
+                widget._is_int = opt.get("isInt", False)
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                row_layout.addWidget(widget, stretch=1)
+                self._option_widgets[key] = widget
+            else:
+                widget = QLineEdit(str(current_val) if current_val is not None else "")
+                widget._option_key = key
+                widget._option_type = "text"
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                row_layout.addWidget(widget, stretch=1)
+                self._option_widgets[key] = widget
+
+            row_layout.addStretch()
+            self.options_form_layout.addLayout(row_layout)
+
+    def _collect_options(self):
+        result = {}
+        for key, widget in self._option_widgets.items():
+            opt_type = widget._option_type
+            if opt_type == "enum":
+                result[key] = widget.currentData()
+            elif opt_type == "boolean":
+                result[key] = widget.isChecked()
+            elif opt_type == "number":
+                text = widget.text().strip()
+                if text:
+                    try:
+                        if getattr(widget, '_is_int', False):
+                            result[key] = int(text)
+                        else:
+                            result[key] = float(text)
+                    except ValueError:
+                        result[key] = text
+            else:
+                result[key] = widget.text().strip()
+        skip_keys = {"tbpu.ignoreArea"}
+        cleaned = {}
+        for k, v in result.items():
+            if k in skip_keys:
+                if v is None or v == "" or v == "[]" or v == []:
+                    continue
+            cleaned[k] = v
+        return cleaned
+
+    def _save_and_close(self):
+        self._flush_current_to_cache()
+        if self._config:
+            plugins = self._config.get("plugins", self._config)
+            for target_key, cache in self._memory_cache.items():
+                if "plugins" in self._config:
+                    bar_config = plugins.get(target_key, {})
+                else:
+                    bar_config = self._config.get(target_key, {})
+                bar_config["ocr_api_ip"] = cache.get("ip", "")
+                data_dict = cache.get("data", {})
+                if data_dict:
+                    bar_config["ocr_api_data"] = json.dumps(data_dict, ensure_ascii=False)
+                else:
+                    bar_config["ocr_api_data"] = ""
+        self.accept()
+
+    def get_config(self):
+        return self._config
+
+
 class ConfigTool(QMainWindow):
     _ocr_status_signal = pyqtSignal(bool)
     _game_status_signal = pyqtSignal(bool)
@@ -625,6 +1026,29 @@ class ConfigTool(QMainWindow):
                     self.ocr_status_label.setText("")
                     self.ocr_status_label.setStyleSheet("font-size: 11px;")
 
+    def _save_config_to_file(self):
+        config_path = os.path.join(_plugin_dir, 'config.json')
+        try:
+            def _clean_for_save(obj):
+                if isinstance(obj, dict):
+                    return {k: _clean_for_save(v) for k, v in obj.items() if not k.startswith('_')}
+                elif isinstance(obj, list):
+                    return [_clean_for_save(item) for item in obj]
+                return obj
+            save_data = {"config": _clean_for_save(self.config)}
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=4)
+        except Exception as e:
+            print(f"[ConfigTool] 保存配置失败: {e}")
+
+    def _open_ocr_advanced_settings(self):
+        dialog = OcrAdvancedDialog(self, config=self.config)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.config = dialog.get_config()
+            self._save_config_to_file()
+            if hasattr(self, '_ocr_test_timer'):
+                self._ocr_test_timer.start(500)
+
     def _update_ocr_ui_visibility(self, ocr_enabled):
         """根据OCR启用状态更新UI可见性 - 使用已保存的widget引用"""
         if not hasattr(self, 'group_widgets'):
@@ -841,12 +1265,16 @@ class ConfigTool(QMainWindow):
         ocr_row.checkbox.stateChanged.connect(self.on_ocr_toggled)
         row += 1
 
-        # OCR端口配置（OCR专属）
+        # OCR端口配置（OCR专属）+ 进阶配置按钮
         self.ocr_port_row = self.create_field_row(game_layout, row, "OCR端口:", "ocr.port",
                                                    field_type="number", ocr_related=True)
         self.ocr_status_label = QLabel("")
         self.ocr_status_label.setStyleSheet("font-size: 11px;")
         self.ocr_status_label.ocr_related = True
+        ocr_adv_btn = QPushButton("OCR进阶配置")
+        ocr_adv_btn.setFixedWidth(120)
+        ocr_adv_btn.clicked.connect(self._open_ocr_advanced_settings)
+        ocr_adv_btn.ocr_related = True
         ocr_port_layout = self.ocr_port_row.layout()
         stretch_idx = -1
         for i in range(ocr_port_layout.count()):
@@ -857,6 +1285,7 @@ class ConfigTool(QMainWindow):
         if stretch_idx >= 0:
             ocr_port_layout.takeAt(stretch_idx)
         ocr_port_layout.addWidget(self.ocr_status_label)
+        ocr_port_layout.addWidget(ocr_adv_btn)
         ocr_port_layout.addStretch()
         row += 1
 
@@ -873,8 +1302,11 @@ class ConfigTool(QMainWindow):
         self.create_field_row(game_layout, row, "扫描间隔:", "scan_interval",
                               field_type="number")
         row += 1
-        self.create_field_row(game_layout, row, "启用悬浮窗:", "overlay.enabled",
-                              field_type="boolean", is_boolean=True)
+        self.create_field_row(game_layout, row, "开关键:", "toggle_key",
+                              field_type="text")
+        row += 1
+        self.create_field_row(game_layout, row, "设置模式键:", "setting_mode_key",
+                              field_type="text")
         row += 1
 
         self.config_layout.addWidget(game_group)
@@ -1560,8 +1992,7 @@ class ConfigTool(QMainWindow):
 
             ocr_top_left = lib.parse_coordinate(self.get_config_value("health_bar.ocr_top_left") or [0, 0])
             ocr_bottom_right = lib.parse_coordinate(self.get_config_value("health_bar.ocr_bottom_right") or [0, 0])
-            filter_colors_raw = self.get_config_value("health_bar.ocr_number_color")
-            filter_tolerance = self.get_config_value("health_bar.ocr_number_tolerance") or 0
+            ocr_filters = self.get_config_value("health_bar.ocr_filters") or []
 
             if not isinstance(ocr_top_left, list) or len(ocr_top_left) < 2:
                 QMessageBox.warning(self, "错误", "请先配置血条OCR左上角坐标")
@@ -1569,8 +2000,6 @@ class ConfigTool(QMainWindow):
             if not isinstance(ocr_bottom_right, list) or len(ocr_bottom_right) < 2:
                 QMessageBox.warning(self, "错误", "请先配置血条OCR右下角坐标")
                 return
-
-            filter_colors = lib.parse_colors(filter_colors_raw) if filter_colors_raw else []
 
             offset_x = capture_region[0] if len(capture_region) >= 1 else 0
             offset_y = capture_region[1] if len(capture_region) >= 2 else 0
@@ -1600,17 +2029,18 @@ class ConfigTool(QMainWindow):
             orig_cropped = orig_img.crop((x1, y1, x2, y2))
 
             filtered_bgra = None
-            if filter_colors and filter_tolerance > 0:
-                cropped_bytes = bytearray()
-                for y in range(y1, y2):
-                    row_start = (y * img_width + x1) * 4
-                    row_end = row_start + crop_w * 4
-                    if row_end > len(bmp_data):
-                        QMessageBox.warning(self, "错误", "裁剪区域超出截图范围")
-                        return
-                    cropped_bytes.extend(bmp_data[row_start:row_end])
-                cropped_bytes = bytes(cropped_bytes)
-                filtered_bgra = lib.apply_ocr_filter(cropped_bytes, crop_w, crop_h, filter_colors, filter_tolerance)
+            cropped_bytes = bytearray()
+            for y in range(y1, y2):
+                row_start = (y * img_width + x1) * 4
+                row_end = row_start + crop_w * 4
+                if row_end > len(bmp_data):
+                    QMessageBox.warning(self, "错误", "裁剪区域超出截图范围")
+                    return
+                cropped_bytes.extend(bmp_data[row_start:row_end])
+            cropped_bytes = bytes(cropped_bytes)
+
+            if ocr_filters:
+                filtered_bgra = lib.apply_filters_chain(cropped_bytes, crop_w, crop_h, ocr_filters, lib.parse_colors)
 
             screenshot_dir = os.path.join(_plugin_dir, "screenshots")
             os.makedirs(screenshot_dir, exist_ok=True)
@@ -1631,7 +2061,7 @@ class ConfigTool(QMainWindow):
             if filtered_path:
                 msg += f"\n滤镜后已保存: {filtered_path}"
             else:
-                msg += "\n未应用滤镜(未配置滤镜颜色或容差为0)"
+                msg += "\n未应用滤镜(未配置滤镜链)"
 
             self.status_label.setText(f"状态: OCR滤镜预览已保存")
 
@@ -1640,9 +2070,10 @@ class ConfigTool(QMainWindow):
             result_dialog.setMinimumSize(600, 400)
             result_layout = QVBoxLayout(result_dialog)
 
+            filters_desc = ", ".join(f.get("type", "?") for f in ocr_filters) if ocr_filters else "无"
             info_label = QLabel(f"OCR区域: ({ocr_top_left[0]},{ocr_top_left[1]}) - ({ocr_bottom_right[0]},{ocr_bottom_right[1]})  "
                                 f"尺寸: {crop_w}x{crop_h}\n"
-                                f"滤镜颜色: {filter_colors}  容差: {filter_tolerance}")
+                                f"滤镜链: {filters_desc}")
             result_layout.addWidget(info_label)
 
             images_layout = QHBoxLayout()
@@ -1691,10 +2122,13 @@ class ConfigTool(QMainWindow):
             capture_region = self.capture_region
 
             ocr_port = self.get_config_value("ocr.port") or 1395
+            health_api_ip = self.get_config_value("health_bar.ocr_api_ip") or ""
+            shield_api_ip = self.get_config_value("shield_bar.ocr_api_ip") or ""
 
-            if not lib.check_ocr_server(ocr_port):
-                QMessageBox.warning(self, "错误", f"OCR服务端未运行 (端口: {ocr_port})\n请先启动 Umi-OCR 软件")
-                return
+            if not health_api_ip and not shield_api_ip:
+                if not lib.check_ocr_server(ocr_port):
+                    QMessageBox.warning(self, "错误", f"OCR服务端未运行 (端口: {ocr_port})\n请先启动 Umi-OCR 软件")
+                    return
 
             offset_x = capture_region[0] if len(capture_region) >= 1 else 0
             offset_y = capture_region[1] if len(capture_region) >= 2 else 0
@@ -1703,8 +2137,8 @@ class ConfigTool(QMainWindow):
 
             health_ocr_top_left = lib.parse_coordinate(self.get_config_value("health_bar.ocr_top_left") or [0, 0])
             health_ocr_bottom_right = lib.parse_coordinate(self.get_config_value("health_bar.ocr_bottom_right") or [0, 0])
-            health_filter_colors = lib.parse_colors(self.get_config_value("health_bar.ocr_number_color"))
-            health_filter_tolerance = self.get_config_value("health_bar.ocr_number_tolerance") or 0
+            health_filters = self.get_config_value("health_bar.ocr_filters") or []
+            health_api_data = self.get_config_value("health_bar.ocr_api_data") or ""
 
             if isinstance(health_ocr_top_left, list) and len(health_ocr_top_left) >= 2 and \
                isinstance(health_ocr_bottom_right, list) and len(health_ocr_bottom_right) >= 2:
@@ -1713,10 +2147,12 @@ class ConfigTool(QMainWindow):
                 hx2 = health_ocr_bottom_right[0] - offset_x
                 hy2 = health_ocr_bottom_right[1] - offset_y
                 if hx2 > hx1 and hy2 > hy1:
-                    health_number, health_ocr_time = lib.ocr_recognize_number(
+                    health_number, health_ocr_time, _ = lib.ocr_recognize_number(
                         self.bmp_data, hx1, hy1, hx2, hy2, img_width,
                         port=ocr_port, log=lambda msg, lvl="INFO": None,
-                        filter_colors=health_filter_colors, filter_tolerance=health_filter_tolerance
+                        filters=health_filters if health_filters else None,
+                        parse_color_func=lib.parse_colors,
+                        api_ip=health_api_ip or None, api_data=health_api_data or None
                     )
                     results.append(f"血量OCR: {health_number if health_number is not None else '未识别'}  (耗时: {health_ocr_time*1000:.0f}ms)")
                 else:
@@ -1726,8 +2162,8 @@ class ConfigTool(QMainWindow):
 
             shield_ocr_top_left = lib.parse_coordinate(self.get_config_value("shield_bar.ocr_top_left") or [0, 0])
             shield_ocr_bottom_right = lib.parse_coordinate(self.get_config_value("shield_bar.ocr_bottom_right") or [0, 0])
-            shield_filter_colors = lib.parse_colors(self.get_config_value("shield_bar.ocr_number_color"))
-            shield_filter_tolerance = self.get_config_value("shield_bar.ocr_number_tolerance") or 0
+            shield_filters = self.get_config_value("shield_bar.ocr_filters") or []
+            shield_api_data = self.get_config_value("shield_bar.ocr_api_data") or ""
 
             if isinstance(shield_ocr_top_left, list) and len(shield_ocr_top_left) >= 2 and \
                isinstance(shield_ocr_bottom_right, list) and len(shield_ocr_bottom_right) >= 2:
@@ -1736,10 +2172,12 @@ class ConfigTool(QMainWindow):
                 sx2 = shield_ocr_bottom_right[0] - offset_x
                 sy2 = shield_ocr_bottom_right[1] - offset_y
                 if sx2 > sx1 and sy2 > sy1:
-                    shield_number, shield_ocr_time = lib.ocr_recognize_number(
+                    shield_number, shield_ocr_time, _ = lib.ocr_recognize_number(
                         self.bmp_data, sx1, sy1, sx2, sy2, img_width,
                         port=ocr_port, log=lambda msg, lvl="INFO": None,
-                        filter_colors=shield_filter_colors, filter_tolerance=shield_filter_tolerance
+                        filters=shield_filters if shield_filters else None,
+                        parse_color_func=lib.parse_colors,
+                        api_ip=shield_api_ip or None, api_data=shield_api_data or None
                     )
                     results.append(f"盾量OCR: {shield_number if shield_number is not None else '未识别'}  (耗时: {shield_ocr_time*1000:.0f}ms)")
                 else:
@@ -1893,29 +2331,41 @@ class ConfigTool(QMainWindow):
                 try:
                     from ocr import create_png_from_bgra, check_ocr_server
                     import base64, requests, json as _json
-                    ocr_port = self.get_config_value("ocr_port") or 1395
-                    if check_ocr_server(ocr_port):
+                    ocr_port = self.get_config_value("ocr.port") or 1395
+                    ocr_api_ip = (self.get_config_value("health_bar.ocr_api_ip") or "").strip()
+                    if not ocr_api_ip or lib.check_ocr_server(ocr_port):
                         _ocr_server_ok[0] = True
                         png_for_ocr = create_png_from_bgra(result, w, h)
                         if png_for_ocr:
                             b64 = base64.b64encode(bytes(png_for_ocr)).decode('utf-8')
-                            data = {"base64": b64, "options": {
-                                "data.format": "text",
-                                "ocr.language": "models/config_en.txt",
-                                "ocr.cls": False,
-                                "tbpu.parser": "none"
-                            }}
-                            r = requests.post(f"http://127.0.0.1:{ocr_port}/api/ocr",
+                            ocr_api_data = self.get_config_value("health_bar.ocr_api_data") or ""
+                            options = {}
+                            if ocr_api_data:
+                                try:
+                                    options = json.loads(ocr_api_data) if isinstance(ocr_api_data, str) else ocr_api_data
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            if not options:
+                                options = {
+                                    "data.format": "text",
+                                    "ocr.language": "models/config_en.txt",
+                                    "ocr.cls": False,
+                                    "tbpu.parser": "none"
+                                }
+                            data = {"base64": b64, "options": options}
+                            api_ip = ocr_api_ip if ocr_api_ip else "127.0.0.1"
+                            r = requests.post(f"http://{api_ip}:{ocr_port}/api/ocr",
                                               data=_json.dumps(data),
                                               headers={"Content-Type": "application/json"},
                                               timeout=5)
                             if r.status_code == 200:
                                 res = r.json()
-                                if res.get('code') == 100:
-                                    ocr_text = str(res.get('data', '')).strip()
+                                from ocr import _extract_ocr_text
+                                ocr_text = _extract_ocr_text(res)
+                                if ocr_text:
                                     ocr_result_label.setText(f"OCR: {ocr_text}")
                                 else:
-                                    ocr_result_label.setText(f"OCR: 错误 {res.get('code')}")
+                                    ocr_result_label.setText(f"OCR: 未识别")
                             else:
                                 ocr_result_label.setText(f"OCR: HTTP {r.status_code}")
                         else:
@@ -2470,10 +2920,17 @@ class ConfigTool(QMainWindow):
                 self.ocr_status_label.setStyleSheet("font-size: 11px;")
             self._ocr_test_timer.start(10000)
             return
+        health_api_ip = (self.get_config_value("health_bar.ocr_api_ip") or "").strip()
+        shield_api_ip = (self.get_config_value("shield_bar.ocr_api_ip") or "").strip()
         port = self.get_config_value("ocr.port") or 1395
         def _do_test():
             try:
-                ok = lib.check_ocr_server(port)
+                if health_api_ip:
+                    ok = lib.check_ocr_api(health_api_ip, port)
+                elif shield_api_ip:
+                    ok = lib.check_ocr_api(shield_api_ip, port)
+                else:
+                    ok = lib.check_ocr_server(port)
             except Exception:
                 ok = False
             self._ocr_status_signal.emit(ok)
@@ -2485,6 +2942,7 @@ class ConfigTool(QMainWindow):
             if ok:
                 self.ocr_status_label.setText("● 已连接")
                 self.ocr_status_label.setStyleSheet("color: #4CAF50; font-size: 11px;")
+                self._auto_init_ocr_advanced()
             else:
                 self.ocr_status_label.setText("● 未连接")
                 self.ocr_status_label.setStyleSheet("color: #F44336; font-size: 11px;")
@@ -2492,6 +2950,53 @@ class ConfigTool(QMainWindow):
             self._ocr_test_timer.start(30000)
         else:
             self._ocr_test_timer.start(10000)
+
+    def _auto_init_ocr_advanced(self):
+        needs_init = False
+        for target_key in _OCR_TARGETS:
+            api_data = self.get_config_value(f"{target_key}.ocr_api_data") or ""
+            if not api_data:
+                needs_init = True
+                break
+        if not needs_init:
+            return
+        if hasattr(self, 'ocr_status_label'):
+            self.ocr_status_label.setText("初始化 OCR 进阶配置...")
+            self.ocr_status_label.setStyleSheet("color: #FF9800; font-size: 11px;")
+            QApplication.processEvents()
+        port = self.get_config_value("ocr.port") or 1395
+        try:
+            import requests
+            r = requests.get(f"http://127.0.0.1:{port}/api/ocr/get_options", timeout=3)
+            if r.status_code == 200:
+                res = r.json()
+                options = res if "code" not in res else res.get("data", res)
+                if isinstance(options, dict):
+                    for target_key in _OCR_TARGETS:
+                        api_data = self.get_config_value(f"{target_key}.ocr_api_data") or ""
+                        if not api_data:
+                            init_data = {}
+                            for key, opt in options.items():
+                                if not isinstance(opt, dict):
+                                    continue
+                                if key in _OCR_DEFAULT_OVERRIDES:
+                                    init_data[key] = _OCR_DEFAULT_OVERRIDES[key]
+                                else:
+                                    default_val = opt.get("default")
+                                    if default_val is not None:
+                                        init_data[key] = default_val
+                            skip_keys = {"tbpu.ignoreArea"}
+                            cleaned = {}
+                            for k, v in init_data.items():
+                                if k in skip_keys:
+                                    if v is None or v == "" or v == "[]" or v == []:
+                                        continue
+                                cleaned[k] = v
+                            self.set_config_value(f"{target_key}.ocr_api_data", json.dumps(cleaned, ensure_ascii=False))
+                    self._save_config_to_file()
+        except Exception:
+            pass
+        QTimer.singleShot(2000, lambda: self._test_ocr_connection() if hasattr(self, '_test_ocr_connection') else None)
 
     def _test_game_connection(self):
         game_title = self.get_config_value("game.process_title") or ""
@@ -2660,167 +3165,6 @@ class ConfigTool(QMainWindow):
             else:
                 parts.append(f"{min_f},{max_f},{dur},{mode},{is_on}/{data}")
         return "Dungeonlab+pulse:" + "+section+".join(parts)
-
-    def _on_health_wave_changed(self):
-        text = self.health_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.health_pulse", lines)
-
-    def _on_shield_wave_changed(self):
-        text = self.shield_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.shield_pulse", lines)
-
-    def _on_health_wave_changed(self):
-        text = self.health_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.health_pulse", lines)
-        if hasattr(self, 'health_wave_preview'):
-            self.health_wave_preview.update_data(lines)
-
-    def _on_shield_wave_changed(self):
-        text = self.shield_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.shield_pulse", lines)
-        if hasattr(self, 'shield_wave_preview'):
-            self.shield_wave_preview.update_data(lines)
-
-    def _parse_wave_step(self, line):
-        try:
-            line = line.strip()
-            if len(line) < 16:
-                return None
-            freq_val = int(line[:2], 16)
-            strength_val = int(line[8:10], 16)
-            return {"freq": freq_val, "strength": strength_val, "raw": line}
-        except (ValueError, IndexError):
-            return None
-
-    def _encode_wave_step(self, freq, strength):
-        return f"{freq:02X}{freq:02X}{freq:02X}{freq:02X}{strength:02X}{strength:02X}{strength:02X}{strength:02X}"
-
-
-    def _parse_dungeonlab(self, text):
-        try:
-            text = text.strip()
-            if not text.startswith("Dungeonlab+pulse:"):
-                return None
-            body = text[len("Dungeonlab+pulse:"):]
-            sections_raw = body.split("+section+")
-            all_steps = []
-            speed_rate = 1
-            if sections_raw and "=" in sections_raw[0]:
-                prefix, rest = sections_raw[0].split("=", 1)
-                prefix_parts = prefix.split(",")
-                if len(prefix_parts) >= 2:
-                    try:
-                        speed_rate = max(1, int(float(prefix_parts[1])))
-                    except (ValueError, IndexError):
-                        pass
-                sections_raw[0] = rest
-            for sec_idx, sec in enumerate(sections_raw):
-                if "/" not in sec:
-                    continue
-                header, pulses_str = sec.split("/", 1)
-                header_parts = header.split(",")
-                if len(header_parts) < 5:
-                    continue
-                try:
-                    min_freq_idx = int(float(header_parts[0]))
-                    max_freq_idx = int(float(header_parts[1]))
-                    duration_idx = int(float(header_parts[2]))
-                    mode = int(float(header_parts[3]))
-                    is_on = int(float(header_parts[4]))
-                except (ValueError, IndexError):
-                    continue
-                if is_on == 0:
-                    continue
-                min_freq_idx = max(0, min(min_freq_idx, len(_DG_FREQ_MAP) - 1))
-                max_freq_idx = max(0, min(max_freq_idx, len(_DG_FREQ_MAP) - 1))
-                duration = _DG_SECTION_TIME_MAP[duration_idx] if 0 <= duration_idx < len(_DG_SECTION_TIME_MAP) else 1.0
-                pulses = [p.strip() for p in pulses_str.split(",") if p.strip()]
-                if not pulses:
-                    continue
-                pulses_duration_sec = len(pulses) * 0.1
-                repeat_times = max(1, int(duration / pulses_duration_sec + 0.999))
-                for j in range(repeat_times):
-                    for idx, pt in enumerate(pulses):
-                        if "-" in pt:
-                            parts = pt.split("-")
-                            strength_str = parts[0]
-                        else:
-                            strength_str = pt
-                        try:
-                            strength = float(strength_str)
-                        except ValueError:
-                            continue
-                        strength_int = max(0, min(100, int(round(strength))))
-                        if mode == 1:
-                            freq_idx = min_freq_idx
-                        elif mode == 2:
-                            total = repeat_times * len(pulses)
-                            current = j * len(pulses) + idx
-                            freq_idx = min_freq_idx + int((max_freq_idx - min_freq_idx) * current / max(total - 1, 1))
-                        elif mode == 3:
-                            freq_idx = min_freq_idx + int((max_freq_idx - min_freq_idx) * idx / max(len(pulses) - 1, 1))
-                        elif mode == 4:
-                            freq_idx = min_freq_idx + int((max_freq_idx - min_freq_idx) * j / max(repeat_times - 1, 1))
-                        else:
-                            freq_idx = min_freq_idx
-                        freq_idx = max(0, min(freq_idx, len(_DG_FREQ_MAP) - 1))
-                        period_ms = _DG_FREQ_MAP[freq_idx]
-                        v3_freq = _dg_period_to_v3_freq(period_ms)
-                        all_steps.append({"freq": v3_freq, "strength": strength_int,
-                                          "raw": self._encode_wave_step(v3_freq, strength_int)})
-            return all_steps if all_steps else None
-        except Exception:
-            return None
-
-    def _export_dungeonlab(self, steps):
-        if not steps:
-            return ""
-        def v3_freq_to_index(v3_freq):
-            period = _v3_freq_to_period(v3_freq)
-            best_idx = 0
-            best_diff = abs(_DG_FREQ_MAP[0] - period)
-            for i, v in enumerate(_DG_FREQ_MAP):
-                diff = abs(v - period)
-                if diff < best_diff:
-                    best_diff = diff
-                    best_idx = i
-            return best_idx
-        sections_data = []
-        i = 0
-        while i < len(steps):
-            start_idx = i
-            start_freq_idx = v3_freq_to_index(steps[i]["freq"])
-            while i < len(steps) and v3_freq_to_index(steps[i]["freq"]) == start_freq_idx:
-                i += 1
-            group = steps[start_idx:i]
-            freq_idx = start_freq_idx
-            strengths = [s["strength"] for s in group]
-            data_points = ",".join(f"{st:.2f}-0" for st in strengths)
-            duration_idx = 0
-            sections_data.append((freq_idx, freq_idx, duration_idx, 1, 1, data_points))
-        if not sections_data:
-            return ""
-        parts = []
-        for si, (min_f, max_f, dur, mode, is_on, data) in enumerate(sections_data):
-            if si == 0:
-                parts.append(f"0,1,8={min_f},{max_f},{dur},{mode},{is_on}/{data}")
-            else:
-                parts.append(f"{min_f},{max_f},{dur},{mode},{is_on}/{data}")
-        return "Dungeonlab+pulse:" + "+section+".join(parts)
-
-    def _on_health_wave_changed(self):
-        text = self.health_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.health_pulse", lines)
-
-    def _on_shield_wave_changed(self):
-        text = self.shield_wave_edit.toPlainText()
-        lines = [l.strip() for l in text.split('\n') if l.strip()]
-        self.set_config_value("waveform.shield_pulse", lines)
 
     def _open_waveform_editor(self, mode):
         from PyQt6.QtWidgets import QDialogButtonBox, QStyledItemDelegate, QStyleOptionComboBox

@@ -52,7 +52,9 @@ _DEFAULTS = {
             "ocr_number_color": "",
             "ocr_number_tolerance": 30,
             "drop_threshold": 0,
-            "ocr_filters": None
+            "ocr_filters": None,
+            "ocr_api_ip": "",
+            "ocr_api_data": ""
         },
         "shield_bar": {
             "enabled": False,
@@ -69,7 +71,9 @@ _DEFAULTS = {
             "ocr_number_color": "",
             "ocr_number_tolerance": 25,
             "blocks_health": True,
-            "ocr_filters": None
+            "ocr_filters": None,
+            "ocr_api_ip": "",
+            "ocr_api_data": ""
         },
         "overlay": {
             "enabled": True
@@ -211,6 +215,8 @@ class Config:
         self._cache["health_ocr_number_tolerance"] = health_config.get("ocr_number_tolerance", 30)
         self._cache["health_drop_threshold"] = health_config.get("drop_threshold", 0)
         self._cache["health_ocr_filters"] = health_config.get("ocr_filters", [])
+        self._cache["health_ocr_api_ip"] = health_config.get("ocr_api_ip", "")
+        self._cache["health_ocr_api_data"] = health_config.get("ocr_api_data", "")
 
         shield_config = plugins.get("shield_bar", {})
         self._cache["shield_enabled"] = shield_config.get("enabled", False)
@@ -226,6 +232,8 @@ class Config:
         self._cache["shield_ocr_number_tolerance"] = shield_config.get("ocr_number_tolerance", 25)
         self._cache["shield_blocks_health"] = shield_config.get("blocks_health", True)
         self._cache["shield_ocr_filters"] = shield_config.get("ocr_filters", [])
+        self._cache["shield_ocr_api_ip"] = shield_config.get("ocr_api_ip", "")
+        self._cache["shield_ocr_api_data"] = shield_config.get("ocr_api_data", "")
 
         overlap_config = plugins.get("overlap", {})
         self._cache["overlap_enabled"] = overlap_config.get("enabled", True)

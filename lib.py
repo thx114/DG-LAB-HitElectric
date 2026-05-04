@@ -9,8 +9,8 @@ if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
 
 from capture import capture_screen_fast, capture_screen_region, save_screenshot_sync, take_screenshot, BITMAPINFOHEADER, BITMAPINFO, RECT
-from image import get_pixel_color, parse_coordinate, parse_coordinates, parse_color, parse_colors, color_match, check_positions_match, check_positions_count_match
-from ocr import check_ocr_server, set_ocr_port, get_ocr_server_url, crop_image_for_ocr, ocr_recognize_number, extract_number, apply_ocr_filter, apply_filters_chain, create_png_from_bgra, create_bmp_from_bgra
+from image import get_pixel_color, parse_coordinate, parse_coordinates, parse_color, parse_colors, color_match, check_positions_match, check_positions_count_match, detect_bar_length
+from ocr import check_ocr_server, check_ocr_api, set_ocr_port, get_ocr_server_url, crop_image_for_ocr, ocr_recognize_number, extract_number, apply_ocr_filter, apply_filters_chain, create_png_from_bgra, create_bmp_from_bgra
 
 SRCCOPY = 0x00CC0020
 
