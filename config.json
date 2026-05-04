@@ -80,7 +80,9 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "ocr_api_ip": "",
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "shield_bar": {
                 "enabled": true,
@@ -128,7 +130,9 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "ocr_api_ip": "",
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "overlay": {
                 "enabled": true
@@ -136,10 +140,11 @@
             "overlap": {
                 "strength_add": 1,
                 "strength_max": 200,
-                "enabled": true
+                "enabled": true,
+                "duration_multiplier": 2
             },
             "ocr": {
-                "enabled": false,
+                "enabled": true,
                 "port": 1395
             },
             "multi_character": {
@@ -149,6 +154,11 @@
                 "gamepad_buttons": "0x0001,0x0008,0x0002,0x0004",
                 "switch_immunity_frames": 5,
                 "switch_delay_frames": 1
+            },
+            "damage_detect": {
+                "enabled": false,
+                "mid_value": 5000,
+                "max_bonus": 10
             }
         },
         "waveform": {

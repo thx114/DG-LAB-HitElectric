@@ -82,7 +82,7 @@ _DEFAULTS = {
             "enabled": True,
             "strength_add": 1,
             "strength_max": 200,
-            "duration_multiplier": 2
+            "duration_multiplier": 1.5
         },
         "ocr": {
             "enabled": False,
@@ -163,7 +163,7 @@ def _ensure_defaults(data):
     # overlap 配置
     overlap = plugins.setdefault("overlap", {})
     if "duration_multiplier" not in overlap:
-        overlap["duration_multiplier"] = 2
+        overlap["duration_multiplier"] = 1.5
 
     # damage_detect 配置
     damage = plugins.setdefault("damage_detect", {})
@@ -275,7 +275,7 @@ class Config:
         self._cache["overlap_enabled"] = overlap_config.get("enabled", True)
         self._cache["overlap_strength_add"] = overlap_config.get("strength_add", 1)
         self._cache["overlap_strength_max"] = overlap_config.get("strength_max", 200)
-        self._cache["overlap_duration_multiplier"] = overlap_config.get("duration_multiplier", 2)
+        self._cache["overlap_duration_multiplier"] = overlap_config.get("duration_multiplier", 1.5)
 
         ocr_config = plugins.get("ocr", {})
         self._cache["ocr_enabled"] = ocr_config.get("enabled", False)

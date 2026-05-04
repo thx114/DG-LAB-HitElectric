@@ -93,6 +93,7 @@ electric_active_until = 0.0
 electric_base_until = 0.0
 electric_trigger_message = ""
 electric_trigger_count = 0
+overlap_accumulated = 0
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
@@ -620,7 +621,7 @@ def _clear_pluses(channel="All"):
 
 async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", damage_bonus=0):
     global current_electric_strength, current_strength_a, current_strength_b, electric_active_until, electric_base_until
-    global electric_trigger_message, electric_trigger_count
+    global electric_trigger_message, electric_trigger_count, overlap_accumulated
 
     now = time.time()
     if pulse_type == "health":
@@ -632,13 +633,23 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
     # 检查是否是overlap叠加（用于强度增加）
     is_overlap = now < electric_active_until
 
+    # 如果不在overlap时间内，重置累加值
+    if not is_overlap:
+        overlap_accumulated = 0
+
+    overlap_max = cached_config.get("overlap_strength_max", 200)
+    base_strength = strength_values.get("health_a" if pulse_type == "health" else "shield_a", 20)
+    current_total = base_strength + overlap_accumulated + damage_bonus
+    proximity = min(current_total / overlap_max, 1.0) if overlap_max > 0 else 0
+
     total_add = damage_bonus
     overlap_add = 0
     if is_overlap and cached_config.get("overlap_enabled", True):
-        overlap_add = cached_config.get("overlap_strength_add", 1)
-        total_add += overlap_add
-        if now < electric_base_until:
-            _clear_pluses("All")
+        overlap_add_base = cached_config.get("overlap_strength_add", 1)
+        overlap_add = overlap_add_base * (1.0 - proximity)
+        overlap_accumulated += overlap_add
+        total_add += overlap_accumulated
+        _clear_pluses("All")
 
     # 应用受伤程度检测的增幅上限规则
     # 只弱化 damage_bonus 的部分，overlap_add 不受影响
@@ -646,13 +657,12 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
     if cached_config.get("damage_enabled", False) and damage_bonus > 0:
         max_bonus = cached_config.get("damage_max_bonus", 10)
         cap = max_bonus * 1.2
-        if damage_bonus + overlap_add > cap:
-            excess = damage_bonus + overlap_add - cap
+        if damage_bonus + overlap_accumulated > cap:
+            excess = damage_bonus + overlap_accumulated - cap
             weaken_amount = min(damage_bonus, excess)
             damage_bonus = damage_bonus - weaken_amount * 0.75
-            total_add = damage_bonus + overlap_add
+            total_add = damage_bonus + overlap_accumulated
 
-    overlap_max = cached_config.get("overlap_strength_max", 200)
     strength_a = min(strength_a + total_add, overlap_max)
     strength_b = min(strength_b + total_add, overlap_max)
 
@@ -661,8 +671,8 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
         parts = []
         if damage_bonus > 0:
             parts.append(f"受伤检测+{damage_bonus:.0f}")
-        if overlap_add > 0:
-            parts.append(f"overlap+{overlap_add}")
+        if overlap_accumulated > 0:
+            parts.append(f"overlap+{overlap_accumulated}")
         if parts:
             log(f"强度增幅: {', '.join(parts)} | 总增幅+{total_add:.0f} | 最终强度 A:{strength_a:.0f} B:{strength_b:.0f}")
 
@@ -693,7 +703,8 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
 
     _send_pluses(pulse_data, "All", 1)
     current_electric_strength = max(strength_a, strength_b)
-    duration_mult = cached_config.get("overlap_duration_multiplier", 2)
+    duration_mult_base = cached_config.get("overlap_duration_multiplier", 1.5)
+    duration_mult = 1.0 + (duration_mult_base - 1.0) * (1.0 - proximity)
     electric_base_until = now + pulse_duration
     electric_active_until = now + pulse_duration * duration_mult
     await asyncio.sleep(0.05)
