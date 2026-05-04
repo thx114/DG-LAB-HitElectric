@@ -10,44 +10,53 @@
                 "process_exeName": "Calabiyau-Win64-Shipping.exe",
                 "process_title": "卡拉彼丘",
                 "region": {
-                    "top_left": "97, 984",
+                    "top_left": [
+                        132,
+                        1311
+                    ],
                     "bottom_right": "1484, 1413"
                 }
             },
             "plus_sign": {
-                "positions": "111, 1026",
+                "positions": "149, 1368",
                 "colors": "#EEEEEE",
-                "negative_positions": "102, 1026 | 120, 1046",
+                "negative_positions": "135, 1366 | 166, 1398",
                 "negative_colors": "#EEEEEE | #EEEEEE",
                 "tolerance": 15,
                 "enabled": true
             },
             "spectate": {
-                "positions": "1007, 1050 | 1015, 1050 | 1096, 1049 | 1104, 1049",
-                "colors": "#EB4353 | #DDDDDD | #DDDDDD | #EB4353",
+                "positions": "1344, 1400 | 1354, 1399 | 1462, 1398 | 1473, 1398",
+                "colors": "#EB4353|#DDDDDD|#DDDDDD|#EB4353",
                 "tolerance": 25,
                 "enabled": true
             },
             "health_bar": {
                 "enabled": true,
-                "start": "112, 1026",
-                "end": "345, 1025",
-                "colors": "#E9EDEC | #EEEEEE",
+                "start": [
+                    147,
+                    1369
+                ],
+                "end": [
+                    460,
+                    1367
+                ],
+                "colors": "#E9EDEC|#FEFEFE",
                 "tolerance": 10,
                 "sample_points": 25,
                 "strength": 20,
                 "strength_b": 19,
-                "ocr_end_trigger": true,
                 "ocr_top_left": [
-                    387,
-                    1016
+                    518,
+                    1354
                 ],
                 "ocr_bottom_right": [
-                    443,
-                    1043
+                    591,
+                    1391
                 ],
-                "ocr_number_tolerance": 10,
                 "ocr_number_color": "#F7F7F7|#FE95BB",
+                "ocr_number_tolerance": 10,
+                "ocr_end_trigger": true,
                 "drop_threshold": 1,
                 "ocr_filters": [
                     {
@@ -76,25 +85,28 @@
             },
             "shield_bar": {
                 "enabled": true,
-                "start": "111, 1003",
-                "end": "345, 1001",
+                "start": "148, 1341",
+                "end": [
+                    460,
+                    1335
+                ],
                 "colors": "#CA46FF | #00FF9A | #FFD041",
                 "tolerance": 25,
                 "sample_points": 25,
                 "strength": 18,
                 "strength_b": 17,
-                "ocr_end_trigger": true,
-                "blocks_health": true,
                 "ocr_top_left": [
-                    387,
-                    991
+                    516,
+                    1319
                 ],
                 "ocr_bottom_right": [
-                    434,
-                    1013
+                    580,
+                    1350
                 ],
-                "ocr_number_color": "#FFD041|#CA46FF",
                 "ocr_number_tolerance": 10,
+                "ocr_number_color": "#FFD041|#CA46FF",
+                "blocks_health": true,
+                "ocr_end_trigger": true,
                 "ocr_filters": [
                     {
                         "type": "replace_color",

@@ -2683,7 +2683,7 @@ class ConfigTool(QMainWindow):
             elif f_type == "dilate":
                 f_obj["iterations"] = 1
             elif f_type == "python":
-                f_obj["code"] = "# data: bytearray(BGRA), width, height\n# 修改data后自动生效\nfor i in range(0, len(data)-2, 4):\n    pass"
+                f_obj["code"] = "# data: bytearray(BGRA), width, height\n# np_data: numpy.ndarray\n# 修改data后自动生效\nfor i in range(0, len(data)-2, 4):\n# passnp_data[:4] = [255, 0, 255, 255]\n# np_data[-4:] = [255, 0, 255, 255]"
             new_filters.append(f_obj)
             rebuild_filters_ui()
 

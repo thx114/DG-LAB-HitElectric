@@ -8,7 +8,7 @@ import tkinter as tk
 import os
 import sys
 
-debug_mode = True
+debug_mode = False
 
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
