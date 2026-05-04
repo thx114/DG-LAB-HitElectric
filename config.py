@@ -81,7 +81,8 @@ _DEFAULTS = {
         "overlap": {
             "enabled": True,
             "strength_add": 1,
-            "strength_max": 200
+            "strength_max": 200,
+            "duration_multiplier": 2
         },
         "ocr": {
             "enabled": False,
@@ -95,6 +96,11 @@ _DEFAULTS = {
             "gamepad_buttons": "0x1000,0x2000,0x4000,0x8000",
             "switch_immunity_frames": 5,
             "switch_delay_frames": 1
+        },
+        "damage_detect": {
+            "enabled": False,
+            "mid_value": 5000,
+            "max_bonus": 10
         }
     },
     "waveform": {
@@ -150,6 +156,35 @@ def _migrate_legacy_filters(data):
     return data
 
 
+def _ensure_defaults(data):
+    """确保所有新增配置项都有默认值，用于兼容旧版本 config.json"""
+    plugins = data.setdefault("plugins", {})
+
+    # overlap 配置
+    overlap = plugins.setdefault("overlap", {})
+    if "duration_multiplier" not in overlap:
+        overlap["duration_multiplier"] = 2
+
+    # damage_detect 配置
+    damage = plugins.setdefault("damage_detect", {})
+    if "enabled" not in damage:
+        damage["enabled"] = False
+    if "mid_value" not in damage:
+        damage["mid_value"] = 5000
+    if "max_bonus" not in damage:
+        damage["max_bonus"] = 10
+
+    # health_bar / shield_bar 新增字段
+    for bar_key in ("health_bar", "shield_bar"):
+        bar = plugins.setdefault(bar_key, {})
+        if "ocr_api_ip" not in bar:
+            bar["ocr_api_ip"] = ""
+        if "ocr_api_data" not in bar:
+            bar["ocr_api_data"] = ""
+
+    return data
+
+
 class Config:
     def __init__(self):
         self._data = copy.deepcopy(_DEFAULTS)
@@ -166,6 +201,7 @@ class Config:
                     file_data = file_data["config"]
                 self._data = _deep_merge(_DEFAULTS, file_data)
                 self._data = _migrate_legacy_filters(self._data)
+                self._data = _ensure_defaults(self._data)
             except (json.JSONDecodeError, IOError):
                 pass
         self._cache = {}
@@ -239,6 +275,7 @@ class Config:
         self._cache["overlap_enabled"] = overlap_config.get("enabled", True)
         self._cache["overlap_strength_add"] = overlap_config.get("strength_add", 1)
         self._cache["overlap_strength_max"] = overlap_config.get("strength_max", 200)
+        self._cache["overlap_duration_multiplier"] = overlap_config.get("duration_multiplier", 2)
 
         ocr_config = plugins.get("ocr", {})
         self._cache["ocr_enabled"] = ocr_config.get("enabled", False)
@@ -252,6 +289,11 @@ class Config:
         self._cache["gamepad_buttons_str"] = multi_char_config.get("gamepad_buttons", "0x1000,0x2000,0x4000,0x8000")
         self._cache["switch_immunity_frames"] = multi_char_config.get("switch_immunity_frames", 5)
         self._cache["switch_delay_frames"] = multi_char_config.get("switch_delay_frames", 1)
+
+        damage_config = plugins.get("damage_detect", {})
+        self._cache["damage_enabled"] = damage_config.get("enabled", False)
+        self._cache["damage_mid_value"] = damage_config.get("mid_value", 5000)
+        self._cache["damage_max_bonus"] = damage_config.get("max_bonus", 10)
 
     def get(self, key, default=None):
         return self._cache.get(key, default)

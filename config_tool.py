@@ -1211,8 +1211,9 @@ class ConfigTool(QMainWindow):
             QMessageBox.warning(self, "错误", f"无法加载配置文件: {e}\n路径: {config_path}")
             self.config = {'plugins': {}}
 
-        from config import _migrate_legacy_filters
+        from config import _migrate_legacy_filters, _ensure_defaults
         self.config = _migrate_legacy_filters(self.config)
+        self.config = _ensure_defaults(self.config)
 
         self.build_config_ui()
 
@@ -1477,7 +1478,20 @@ class ConfigTool(QMainWindow):
         self.create_field_row(overlap_layout, row, "最大强度:", "overlap.strength_max",
                               field_type="number")
         row += 1
+        self.create_field_row(overlap_layout, row, "时间叠加倍数:", "overlap.duration_multiplier",
+                              field_type="number")
+        row += 1
         self.config_layout.addWidget(overlap_group)
+
+        damage_group, damage_layout, _, _ = self.create_config_group("受伤程度检测", "damage_detect", enable_path="damage_detect.enabled")
+        row = 0
+        self.create_field_row(damage_layout, row, "血量中间数:", "damage_detect.mid_value",
+                              field_type="number")
+        row += 1
+        self.create_field_row(damage_layout, row, "强度增幅上限:", "damage_detect.max_bonus",
+                              field_type="number")
+        row += 1
+        self.config_layout.addWidget(damage_group)
 
         multi_char_group, multi_char_layout, _, _ = self.create_config_group("多角色切换配置", "multi_character", enable_path="multi_character.enabled")
         row = 0

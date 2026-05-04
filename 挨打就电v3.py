@@ -90,6 +90,7 @@ current_strength_a = None
 current_strength_b = None
 
 electric_active_until = 0.0
+electric_base_until = 0.0
 electric_trigger_message = ""
 electric_trigger_count = 0
 
@@ -250,6 +251,46 @@ def is_suspect_change(old_value, new_value):
         return True
 
     return False
+
+def calculate_damage_bonus(lost_hp, mid_value, max_bonus):
+    """
+    计算受伤程度检测的强度增幅
+
+    根据损失血量与中间值的比例，分阶段计算强度增幅：
+    - 轻伤(r<10%): max_bonus * 0.2
+    - 中伤(10%-50%): 线性过渡
+    - 重伤(50%-100%): 二次曲线加速
+    - 极限伤(r>=100%): max_bonus * 1.2
+
+    最终增幅上限: max_bonus * 1.2 (如 max_bonus=10 时上限为12)
+    超过上限的部分只弱化 damage_bonus，overlap_add 不受影响
+
+    Args:
+        lost_hp: 损失的血量值
+        mid_value: 血量中间数配置
+        max_bonus: 强度增幅上限配置
+
+    Returns:
+        float: 计算出的强度增幅
+    """
+    if mid_value <= 0 or lost_hp <= 0 or max_bonus <= 0:
+        return 0
+
+    r = min(lost_hp / mid_value, 1.0)
+
+    if r < 0.1:
+        bonus = max_bonus * 0.2
+    elif r < 0.5:
+        t = (r - 0.1) / 0.4
+        bonus = max_bonus * (0.2 + t * 0.4)
+    elif r < 1.0:
+        t = (r - 0.5) / 0.5
+        bonus = max_bonus * (0.6 + t * t * 0.6)
+    else:
+        bonus = max_bonus * 1.2
+
+    return bonus
+
 
 def validate_ocr_value(value_type, new_value, old_value):
     """
@@ -412,7 +453,7 @@ def detect_bar_length(bmp_data, img_width, start_pos, end_pos, bar_colors, toler
 
 def check_health_and_shield(bmp_data, img_width):
     global current_health, current_shield
-    result = {"health_dropped": False, "shield_dropped": False, "health_color_result": "0", "shield_color_result": "0"}
+    result = {"health_dropped": False, "shield_dropped": False, "health_color_result": "0", "shield_color_result": "0", "health_drop_amount": 0, "shield_drop_amount": 0}
     if not has_healthbar:
         return result
     debug("--check_health_and_shield--")
@@ -426,6 +467,7 @@ def check_health_and_shield(bmp_data, img_width):
         )
         shield_pct = min(shield_pct, 100.0)
         if shield_pct < current_shield and has_healthbar:
+            result["shield_drop_amount"] = current_shield - shield_pct
             current_shield = shield_pct
             result["shield_dropped"] = True
         else:
@@ -449,6 +491,7 @@ def check_health_and_shield(bmp_data, img_width):
                 current_health = health_pct
                 if drop_amount >= health_drop_threshold:
                     result["health_dropped"] = True
+                    result["health_drop_amount"] = drop_amount
         else:
             current_health = health_pct
         result["health_color_result"] = health_color_result
@@ -575,8 +618,8 @@ def _clear_pluses(channel="All"):
     elif msg_queue:
         msg_queue.put({'action': "clear_pluses", 'channel': channel})
 
-async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health"):
-    global current_electric_strength, current_strength_a, current_strength_b, electric_active_until
+async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", damage_bonus=0):
+    global current_electric_strength, current_strength_a, current_strength_b, electric_active_until, electric_base_until
     global electric_trigger_message, electric_trigger_count
 
     now = time.time()
@@ -587,14 +630,41 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health"):
     pulse_duration = get_pulse_duration(pulse_data)
 
     # 检查是否是overlap叠加（用于强度增加）
-    is_overlap = now < electric_active_until * 2
+    is_overlap = now < electric_active_until
 
+    total_add = damage_bonus
+    overlap_add = 0
     if is_overlap and cached_config.get("overlap_enabled", True):
         overlap_add = cached_config.get("overlap_strength_add", 1)
-        overlap_max = cached_config.get("overlap_strength_max", 200)
-        strength_a = min(strength_a + overlap_add, overlap_max)
-        strength_b = min(strength_b + overlap_add, overlap_max)
-        _clear_pluses("All")
+        total_add += overlap_add
+        if now < electric_base_until:
+            _clear_pluses("All")
+
+    # 应用受伤程度检测的增幅上限规则
+    # 只弱化 damage_bonus 的部分，overlap_add 不受影响
+    # 上限 = max_bonus * 1.2 (如 max_bonus=10 时上限为12)
+    if cached_config.get("damage_enabled", False) and damage_bonus > 0:
+        max_bonus = cached_config.get("damage_max_bonus", 10)
+        cap = max_bonus * 1.2
+        if damage_bonus + overlap_add > cap:
+            excess = damage_bonus + overlap_add - cap
+            weaken_amount = min(damage_bonus, excess)
+            damage_bonus = damage_bonus - weaken_amount * 0.75
+            total_add = damage_bonus + overlap_add
+
+    overlap_max = cached_config.get("overlap_strength_max", 200)
+    strength_a = min(strength_a + total_add, overlap_max)
+    strength_b = min(strength_b + total_add, overlap_max)
+
+    # 日志记录强度增幅详情
+    if total_add > 0:
+        parts = []
+        if damage_bonus > 0:
+            parts.append(f"受伤检测+{damage_bonus:.0f}")
+        if overlap_add > 0:
+            parts.append(f"overlap+{overlap_add}")
+        if parts:
+            log(f"强度增幅: {', '.join(parts)} | 总增幅+{total_add:.0f} | 最终强度 A:{strength_a:.0f} B:{strength_b:.0f}")
 
     # 感叹号计数：electric_active_until过期后重置为1，否则叠加
     if now >= electric_active_until:
@@ -610,28 +680,30 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health"):
 
     if strength_a == strength_b:
         if strength_a != current_strength_a or strength_b != current_strength_b:
-            _send_set_strength("All", strength_a)
+            _send_set_strength("All", int(strength_a))
             current_strength_a = strength_a
             current_strength_b = strength_b
     else:
         if strength_a != current_strength_a:
-            _send_set_strength("A", strength_a)
+            _send_set_strength("A", int(strength_a))
             current_strength_a = strength_a
         if strength_b != current_strength_b:
-            _send_set_strength("B", strength_b)
+            _send_set_strength("B", int(strength_b))
             current_strength_b = strength_b
 
     _send_pluses(pulse_data, "All", 1)
     current_electric_strength = max(strength_a, strength_b)
-    electric_active_until = now + pulse_duration
+    duration_mult = cached_config.get("overlap_duration_multiplier", 2)
+    electric_base_until = now + pulse_duration
+    electric_active_until = now + pulse_duration * duration_mult
     await asyncio.sleep(0.05)
     current_electric_strength = 0
 
-async def trigger_electric_health(strength_a=20, strength_b=20):
-    await trigger_electric(strength_a, strength_b, "health")
+async def trigger_electric_health(strength_a=20, strength_b=20, damage_bonus=0):
+    await trigger_electric(strength_a, strength_b, "health", damage_bonus)
 
-async def trigger_electric_shield(strength_a=20, strength_b=20):
-    await trigger_electric(strength_a, strength_b, "shield")
+async def trigger_electric_shield(strength_a=20, strength_b=20, damage_bonus=0):
+    await trigger_electric(strength_a, strength_b, "shield", damage_bonus)
 
 def on_toggle_monitoring():
     global is_monitoring
@@ -1250,9 +1322,20 @@ async def monitoring_loop():
                                             if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
                                                 debug(f"盾条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
                                             else:
+                                                # 计算受伤程度增幅
+                                                damage_bonus = 0
+                                                if cached_config.get("damage_enabled", False):
+                                                    shield_drop_amount = current_shield - validated_shield
+                                                    if shield_drop_amount > 0:
+                                                        damage_bonus = calculate_damage_bonus(
+                                                            shield_drop_amount,
+                                                            cached_config.get("damage_mid_value", 5000),
+                                                            cached_config.get("damage_max_bonus", 10)
+                                                        )
                                                 await trigger_electric_shield(
                                                     strength_a=strength_values["shield_a"],
-                                                    strength_b=strength_values["shield_b"]
+                                                    strength_b=strength_values["shield_b"],
+                                                    damage_bonus=damage_bonus
                                                 )
                                     current_shield = max(0, validated_shield)
                                 monitoring_loop.shield_color_result = str(validated_shield) if validated_shield else "0"
@@ -1283,9 +1366,22 @@ async def monitoring_loop():
                                         if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
                                             debug(f"血条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
                                         else:
+                                            # 计算受伤程度增幅
+                                            damage_bonus = 0
+                                            if cached_config.get("damage_enabled", False):
+                                                lost_hp = health_drop_amount
+                                                if current_shield > validated_shield:
+                                                    lost_hp += (current_shield - validated_shield)
+                                                if lost_hp > 0:
+                                                    damage_bonus = calculate_damage_bonus(
+                                                        lost_hp,
+                                                        cached_config.get("damage_mid_value", 5000),
+                                                        cached_config.get("damage_max_bonus", 10)
+                                                    )
                                             await trigger_electric_health(
                                                 strength_a=strength_values["health_a"],
-                                                strength_b=strength_values["health_b"]
+                                                strength_b=strength_values["health_b"],
+                                                damage_bonus=damage_bonus
                                             )
                                 current_health = max(0, validated_health)
                             monitoring_loop.health_color_result = str(validated_health) if validated_health else "0"
@@ -1323,17 +1419,41 @@ async def monitoring_loop():
                         if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
                             debug(f"血条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
                         else:
+                            # 计算受伤程度增幅
+                            damage_bonus = 0
+                            if cached_config.get("damage_enabled", False):
+                                lost_hp = result.get("health_drop_amount", 0)
+                                if result.get("shield_dropped", False):
+                                    lost_hp += result.get("shield_drop_amount", 0)
+                                if lost_hp > 0:
+                                    damage_bonus = calculate_damage_bonus(
+                                        lost_hp,
+                                        cached_config.get("damage_mid_value", 5000),
+                                        cached_config.get("damage_max_bonus", 10)
+                                    )
                             await trigger_electric_health(
                                 strength_a=strength_values["health_a"],
-                                strength_b=strength_values["health_b"]
+                                strength_b=strength_values["health_b"],
+                                damage_bonus=damage_bonus
                             )
                     elif result["shield_dropped"]:
                         if multi_char_enabled and (switch_immunity_frames > 0 or healthbar_appear_immunity or switch_value_unchanged or pending_switch_index >= 0):
                             debug(f"盾条电击被免疫跳过: switch_immunity={switch_immunity_frames}, appear_immunity={healthbar_appear_immunity}, value_unchanged={switch_value_unchanged}, pending={pending_switch_index}")
                         else:
+                            # 计算受伤程度增幅
+                            damage_bonus = 0
+                            if cached_config.get("damage_enabled", False):
+                                shield_drop_amount = result.get("shield_drop_amount", 0)
+                                if shield_drop_amount > 0:
+                                    damage_bonus = calculate_damage_bonus(
+                                        shield_drop_amount,
+                                        cached_config.get("damage_mid_value", 5000),
+                                        cached_config.get("damage_max_bonus", 10)
+                                    )
                             await trigger_electric_shield(
                                 strength_a=strength_values["shield_a"],
-                                strength_b=strength_values["shield_b"]
+                                strength_b=strength_values["shield_b"],
+                                damage_bonus=damage_bonus
                             )
                     
                 else:
