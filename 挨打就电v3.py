@@ -1311,6 +1311,8 @@ async def monitoring_loop():
                     monitoring_loop.filter_total_time = filter_total_time
                     
                     if has_healthbar:
+                        validated_shield = current_shield
+                        
                         # 处理盾条
                         if cached_config.get("shield_enabled", False):
                             shield_number = None
