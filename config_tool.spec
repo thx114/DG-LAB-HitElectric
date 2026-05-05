@@ -3,7 +3,7 @@
 
 a = Analysis(
     ['config_tool.py'],
-    pathex=[r'd:\APPS\惩罚姬\plugins\挨打就电3.1'],
+    pathex=[r'd:\APPS\惩罚姬\plugins\挨打就电'],
     binaries=[],
     datas=[],
     hiddenimports=['lib'],

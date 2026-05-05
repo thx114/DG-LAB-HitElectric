@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import copy
+
 _plugin_dir = os.path.dirname(os.path.abspath(__file__))
 if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
@@ -14,6 +15,7 @@ _DEFAULTS = {
         "setting_mode_key": "f10",
         "overlay_toggle_key": "f6",
         "scan_interval": 0.1,
+        "capture_method": "gdi",
         "log": False,
         "game": {
             "process_exeName": "",
@@ -71,6 +73,7 @@ _DEFAULTS = {
             "ocr_number_color": "",
             "ocr_number_tolerance": 25,
             "blocks_health": True,
+            "drop_threshold": 0,
             "ocr_filters": None,
             "ocr_api_ip": "",
             "ocr_api_data": ""
@@ -82,7 +85,13 @@ _DEFAULTS = {
             "enabled": True,
             "strength_add": 1,
             "strength_max": 200,
-            "duration_multiplier": 1.5
+            "duration_multiplier": 1.5,
+            "decay_enabled": True,
+            "decay_mode": "instant",
+            "decay_value": 1,
+            "decay_percent": 10,
+            "decay_ratio_accel": 0.5,
+            "decay_script": ""
         },
         "ocr": {
             "enabled": False,
@@ -94,13 +103,15 @@ _DEFAULTS = {
             "character_keys": "1,2,3",
             "gamepad_enabled": True,
             "gamepad_buttons": "0x1000,0x2000,0x4000,0x8000",
-            "switch_immunity_frames": 5,
+            "switch_immunity_frames": 2,
             "switch_delay_frames": 1
         },
         "damage_detect": {
             "enabled": False,
             "mid_value": 5000,
-            "max_bonus": 10
+            "max_bonus": 10,
+            "formula": "default",
+            "script": ""
         }
     },
     "waveform": {
@@ -124,6 +135,83 @@ _DEFAULTS = {
         ]
     }
 }
+
+_CACHE_MAP = [
+    (None, "capture_method", "capture_method", None),
+
+    ("plus_sign", "enabled", "plus_enabled", None),
+    ("plus_sign", "positions", "plus_positions", parse_coordinates),
+    ("plus_sign", "colors", "plus_colors", parse_colors),
+    ("plus_sign", "negative_positions", "plus_negative_positions", parse_coordinates),
+    ("plus_sign", "negative_colors", "plus_negative_colors", parse_colors),
+    ("plus_sign", "tolerance", "plus_tolerance", None),
+
+    ("spectate", "enabled", "spectate_enabled", None),
+    ("spectate", "positions", "spectate_positions", parse_coordinates),
+    ("spectate", "colors", "spectate_colors", parse_colors),
+    ("spectate", "tolerance", "spectate_tolerance", None),
+
+    ("health_bar", "enabled", "health_enabled", None),
+    ("health_bar", "start", "health_start", parse_coordinate),
+    ("health_bar", "end", "health_end", parse_coordinate),
+    ("health_bar", "colors", "health_colors", parse_colors),
+    ("health_bar", "tolerance", "health_tolerance", None),
+    ("health_bar", "sample_points", "health_sample_points", None),
+    ("health_bar", "ocr_top_left", "health_ocr_top_left", parse_coordinate),
+    ("health_bar", "ocr_bottom_right", "health_ocr_bottom_right", parse_coordinate),
+    ("health_bar", "ocr_end_trigger", "health_ocr_end_trigger", None),
+    ("health_bar", "ocr_number_color", "health_ocr_number_color", None),
+    ("health_bar", "ocr_number_tolerance", "health_ocr_number_tolerance", None),
+    ("health_bar", "drop_threshold", "health_drop_threshold", None),
+    ("health_bar", "ocr_filters", "health_ocr_filters", None),
+    ("health_bar", "ocr_api_ip", "health_ocr_api_ip", None),
+    ("health_bar", "ocr_api_data", "health_ocr_api_data", None),
+
+    ("shield_bar", "enabled", "shield_enabled", None),
+    ("shield_bar", "start", "shield_start", parse_coordinate),
+    ("shield_bar", "end", "shield_end", parse_coordinate),
+    ("shield_bar", "colors", "shield_colors", parse_colors),
+    ("shield_bar", "tolerance", "shield_tolerance", None),
+    ("shield_bar", "sample_points", "shield_sample_points", None),
+    ("shield_bar", "ocr_top_left", "shield_ocr_top_left", parse_coordinate),
+    ("shield_bar", "ocr_bottom_right", "shield_ocr_bottom_right", parse_coordinate),
+    ("shield_bar", "ocr_end_trigger", "shield_ocr_end_trigger", None),
+    ("shield_bar", "ocr_number_color", "shield_ocr_number_color", None),
+    ("shield_bar", "ocr_number_tolerance", "shield_ocr_number_tolerance", None),
+    ("shield_bar", "blocks_health", "shield_blocks_health", None),
+    ("shield_bar", "drop_threshold", "shield_drop_threshold", None),
+    ("shield_bar", "ocr_filters", "shield_ocr_filters", None),
+    ("shield_bar", "ocr_api_ip", "shield_ocr_api_ip", None),
+    ("shield_bar", "ocr_api_data", "shield_ocr_api_data", None),
+
+    ("overlap", "enabled", "overlap_enabled", None),
+    ("overlap", "strength_add", "overlap_strength_add", None),
+    ("overlap", "strength_max", "overlap_strength_max", None),
+    ("overlap", "duration_multiplier", "overlap_duration_multiplier", None),
+    ("overlap", "decay_enabled", "overlap_decay_enabled", None),
+    ("overlap", "decay_mode", "overlap_decay_mode", None),
+    ("overlap", "decay_value", "overlap_decay_value", None),
+    ("overlap", "decay_percent", "overlap_decay_percent", None),
+    ("overlap", "decay_ratio_accel", "overlap_decay_ratio_accel", None),
+    ("overlap", "decay_script", "overlap_decay_script", None),
+
+    ("ocr", "enabled", "ocr_enabled", None),
+    ("ocr", "port", "ocr_port", None),
+    ("ocr", "health_shield_detect", "ocr_health_shield_detect", None),
+
+    ("multi_character", "enabled", "multi_char_enabled", None),
+    ("multi_character", "character_keys", "character_keys_str", None),
+    ("multi_character", "gamepad_enabled", "gamepad_enabled", None),
+    ("multi_character", "gamepad_buttons", "gamepad_buttons_str", None),
+    ("multi_character", "switch_immunity_frames", "switch_immunity_frames", None),
+    ("multi_character", "switch_delay_frames", "switch_delay_frames", None),
+
+    ("damage_detect", "enabled", "damage_enabled", None),
+    ("damage_detect", "mid_value", "damage_mid_value", None),
+    ("damage_detect", "max_bonus", "damage_max_bonus", None),
+    ("damage_detect", "formula", "damage_formula", None),
+    ("damage_detect", "script", "damage_script", None),
+]
 
 
 def _deep_merge(base, override):
@@ -157,32 +245,25 @@ def _migrate_legacy_filters(data):
 
 
 def _ensure_defaults(data):
-    """确保所有新增配置项都有默认值，用于兼容旧版本 config.json"""
     plugins = data.setdefault("plugins", {})
+    defaults_plugins = _DEFAULTS.get("plugins", {})
 
-    # overlap 配置
-    overlap = plugins.setdefault("overlap", {})
-    if "duration_multiplier" not in overlap:
-        overlap["duration_multiplier"] = 1.5
-
-    # damage_detect 配置
-    damage = plugins.setdefault("damage_detect", {})
-    if "enabled" not in damage:
-        damage["enabled"] = False
-    if "mid_value" not in damage:
-        damage["mid_value"] = 5000
-    if "max_bonus" not in damage:
-        damage["max_bonus"] = 10
-
-    # health_bar / shield_bar 新增字段
-    for bar_key in ("health_bar", "shield_bar"):
-        bar = plugins.setdefault(bar_key, {})
-        if "ocr_api_ip" not in bar:
-            bar["ocr_api_ip"] = ""
-        if "ocr_api_data" not in bar:
-            bar["ocr_api_data"] = ""
+    for key, default_val in defaults_plugins.items():
+        if isinstance(default_val, dict):
+            section = plugins.setdefault(key, {})
+            _deep_fill(section, default_val)
+        elif key not in plugins:
+            plugins[key] = copy.deepcopy(default_val)
 
     return data
+
+
+def _deep_fill(target, defaults):
+    for key, default_val in defaults.items():
+        if key not in target:
+            target[key] = copy.deepcopy(default_val)
+        elif isinstance(default_val, dict) and isinstance(target.get(key), dict):
+            _deep_fill(target[key], default_val)
 
 
 class Config:
@@ -223,77 +304,18 @@ class Config:
         self._cache = {}
         plugins = self._data.get("plugins", {})
 
-        plus_config = plugins.get("plus_sign", {})
-        self._cache["plus_enabled"] = plus_config.get("enabled", True)
-        self._cache["plus_positions"] = parse_coordinates(plus_config.get("positions", ""))
-        self._cache["plus_colors"] = parse_colors(plus_config.get("colors", ""))
-        self._cache["plus_negative_positions"] = parse_coordinates(plus_config.get("negative_positions", ""))
-        self._cache["plus_negative_colors"] = parse_colors(plus_config.get("negative_colors", ""))
-        self._cache["plus_tolerance"] = plus_config.get("tolerance", 30)
-
-        spectate_config = plugins.get("spectate", {})
-        self._cache["spectate_enabled"] = spectate_config.get("enabled", True)
-        self._cache["spectate_positions"] = parse_coordinates(spectate_config.get("positions", ""))
-        self._cache["spectate_colors"] = parse_colors(spectate_config.get("colors", ""))
-        self._cache["spectate_tolerance"] = spectate_config.get("tolerance", 30)
-
-        health_config = plugins.get("health_bar", {})
-        self._cache["health_enabled"] = health_config.get("enabled", False)
-        self._cache["health_start"] = parse_coordinate(health_config.get("start", [0, 0]))
-        self._cache["health_end"] = parse_coordinate(health_config.get("end", [0, 0]))
-        self._cache["health_colors"] = parse_colors(health_config.get("colors", ""))
-        self._cache["health_tolerance"] = health_config.get("tolerance", 30)
-        self._cache["health_sample_points"] = health_config.get("sample_points", 20)
-        self._cache["health_ocr_top_left"] = parse_coordinate(health_config.get("ocr_top_left", [0, 0]))
-        self._cache["health_ocr_bottom_right"] = parse_coordinate(health_config.get("ocr_bottom_right", [100, 100]))
-        self._cache["health_ocr_end_trigger"] = health_config.get("ocr_end_trigger", False)
-        self._cache["health_ocr_number_color"] = health_config.get("ocr_number_color", "")
-        self._cache["health_ocr_number_tolerance"] = health_config.get("ocr_number_tolerance", 30)
-        self._cache["health_drop_threshold"] = health_config.get("drop_threshold", 0)
-        self._cache["health_ocr_filters"] = health_config.get("ocr_filters", [])
-        self._cache["health_ocr_api_ip"] = health_config.get("ocr_api_ip", "")
-        self._cache["health_ocr_api_data"] = health_config.get("ocr_api_data", "")
-
-        shield_config = plugins.get("shield_bar", {})
-        self._cache["shield_enabled"] = shield_config.get("enabled", False)
-        self._cache["shield_start"] = parse_coordinate(shield_config.get("start", [0, 0]))
-        self._cache["shield_end"] = parse_coordinate(shield_config.get("end", [0, 0]))
-        self._cache["shield_colors"] = parse_colors(shield_config.get("colors", ""))
-        self._cache["shield_tolerance"] = shield_config.get("tolerance", 25)
-        self._cache["shield_sample_points"] = shield_config.get("sample_points", 12)
-        self._cache["shield_ocr_top_left"] = parse_coordinate(shield_config.get("ocr_top_left", [0, 0]))
-        self._cache["shield_ocr_bottom_right"] = parse_coordinate(shield_config.get("ocr_bottom_right", [100, 100]))
-        self._cache["shield_ocr_end_trigger"] = shield_config.get("ocr_end_trigger", False)
-        self._cache["shield_ocr_number_color"] = shield_config.get("ocr_number_color", "")
-        self._cache["shield_ocr_number_tolerance"] = shield_config.get("ocr_number_tolerance", 25)
-        self._cache["shield_blocks_health"] = shield_config.get("blocks_health", True)
-        self._cache["shield_ocr_filters"] = shield_config.get("ocr_filters", [])
-        self._cache["shield_ocr_api_ip"] = shield_config.get("ocr_api_ip", "")
-        self._cache["shield_ocr_api_data"] = shield_config.get("ocr_api_data", "")
-
-        overlap_config = plugins.get("overlap", {})
-        self._cache["overlap_enabled"] = overlap_config.get("enabled", True)
-        self._cache["overlap_strength_add"] = overlap_config.get("strength_add", 1)
-        self._cache["overlap_strength_max"] = overlap_config.get("strength_max", 200)
-        self._cache["overlap_duration_multiplier"] = overlap_config.get("duration_multiplier", 1.5)
-
-        ocr_config = plugins.get("ocr", {})
-        self._cache["ocr_enabled"] = ocr_config.get("enabled", False)
-        self._cache["ocr_port"] = ocr_config.get("port", 1395)
-        self._cache["ocr_health_shield_detect"] = ocr_config.get("health_shield_detect", False)
-
-        multi_char_config = plugins.get("multi_character", {})
-        self._cache["multi_char_enabled"] = multi_char_config.get("enabled", False)
-        self._cache["character_keys_str"] = multi_char_config.get("character_keys", "1,2,3")
-        self._cache["gamepad_enabled"] = multi_char_config.get("gamepad_enabled", True)
-        self._cache["gamepad_buttons_str"] = multi_char_config.get("gamepad_buttons", "0x1000,0x2000,0x4000,0x8000")
-        self._cache["switch_immunity_frames"] = multi_char_config.get("switch_immunity_frames", 5)
-        self._cache["switch_delay_frames"] = multi_char_config.get("switch_delay_frames", 1)
-
-        damage_config = plugins.get("damage_detect", {})
-        self._cache["damage_enabled"] = damage_config.get("enabled", False)
-        self._cache["damage_mid_value"] = damage_config.get("mid_value", 5000)
-        self._cache["damage_max_bonus"] = damage_config.get("max_bonus", 10)
+        for section_key, field_key, cache_key, parser in _CACHE_MAP:
+            if section_key is None:
+                section = plugins
+                default_val = _DEFAULTS.get("plugins", {}).get(field_key)
+            else:
+                section = plugins.get(section_key, {})
+                default_val = _DEFAULTS.get("plugins", {}).get(section_key, {}).get(field_key)
+            raw_val = section.get(field_key, default_val)
+            if parser and raw_val is not None:
+                self._cache[cache_key] = parser(raw_val)
+            else:
+                self._cache[cache_key] = raw_val
 
     def get(self, key, default=None):
         return self._cache.get(key, default)

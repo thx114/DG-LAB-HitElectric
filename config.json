@@ -82,7 +82,7 @@
                     }
                 ],
                 "ocr_api_ip": "",
-                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
+                "ocr_api_data": ""
             },
             "shield_bar": {
                 "enabled": true,
@@ -131,8 +131,9 @@
                         "iterations": 1
                     }
                 ],
+                "drop_threshold": 0,
                 "ocr_api_ip": "",
-                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
+                "ocr_api_data": ""
             },
             "overlay": {
                 "enabled": true
@@ -141,11 +142,18 @@
                 "strength_add": 1,
                 "strength_max": 200,
                 "enabled": true,
-                "duration_multiplier": 2
+                "duration_multiplier": 1.5,
+                "decay_enabled": true,
+                "decay_mode": "instant",
+                "decay_value": 1,
+                "decay_percent": 10,
+                "decay_ratio_accel": 0.5,
+                "decay_script": ""
             },
             "ocr": {
-                "enabled": true,
-                "port": 1395
+                "enabled": false,
+                "port": 1395,
+                "health_shield_detect": false
             },
             "multi_character": {
                 "enabled": false,
@@ -155,10 +163,13 @@
                 "switch_immunity_frames": 5,
                 "switch_delay_frames": 1
             },
+            "capture_method": "gdi",
             "damage_detect": {
-                "enabled": false,
-                "mid_value": 5000,
-                "max_bonus": 10
+                "enabled": true,
+                "mid_value": 70,
+                "max_bonus": 10,
+                "formula": "default",
+                "script": ""
             }
         },
         "waveform": {
@@ -180,6 +191,7 @@
                 "0A0A0A0A28282828",
                 "0A0A0A0A0A0A0A0A"
             ]
-        }
+        },
+        "cfgFrom": "D:/APPS/惩罚姬/plugins/挨打就电/预制采样配置-使用配置工具读取/卡丘-2560x1440.v3.2.json"
     }
 }

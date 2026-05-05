@@ -71,7 +71,9 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "ocr_api_ip": "",
+                "ocr_api_data": ""
             },
             "shield_bar": {
                 "enabled": true,
@@ -116,7 +118,10 @@
                         "type": "dilate",
                         "iterations": 1
                     }
-                ]
+                ],
+                "drop_threshold": 0,
+                "ocr_api_ip": "",
+                "ocr_api_data": ""
             },
             "overlay": {
                 "enabled": true
@@ -124,11 +129,19 @@
             "overlap": {
                 "strength_add": 1,
                 "strength_max": 200,
-                "enabled": true
+                "enabled": true,
+                "duration_multiplier": 1.5,
+                "decay_enabled": true,
+                "decay_mode": "instant",
+                "decay_value": 1,
+                "decay_percent": 10,
+                "decay_ratio_accel": 0.5,
+                "decay_script": ""
             },
             "ocr": {
                 "enabled": false,
-                "port": 1395
+                "port": 1395,
+                "health_shield_detect": false
             },
             "multi_character": {
                 "enabled": false,
@@ -137,6 +150,14 @@
                 "gamepad_buttons": "0x0001,0x0008,0x0002,0x0004",
                 "switch_immunity_frames": 5,
                 "switch_delay_frames": 1
+            },
+            "capture_method": "gdi",
+            "damage_detect": {
+                "enabled": true,
+                "mid_value": 70,
+                "max_bonus": 10,
+                "formula": "default",
+                "script": ""
             }
         },
         "waveform": {

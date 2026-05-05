@@ -64,12 +64,6 @@ def _parse_options_data(api_data):
     return None
 
 
-def get_ocr_server_url(port=None):
-    if port is None:
-        port = _ocr_port
-    return f"http://127.0.0.1:{port}"
-
-
 def set_ocr_port(port):
     global _ocr_port
     _ocr_port = port

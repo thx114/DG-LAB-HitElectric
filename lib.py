@@ -9,8 +9,9 @@ if _plugin_dir not in sys.path:
     sys.path.insert(0, _plugin_dir)
 
 from capture import capture_screen_fast, capture_screen_region, save_screenshot_sync, take_screenshot, BITMAPINFOHEADER, BITMAPINFO, RECT
+from capture_dxgi import capture_dxgi_fast, is_dxgi_available, release_dxgi
 from image import get_pixel_color, parse_coordinate, parse_coordinates, parse_color, parse_colors, color_match, check_positions_match, check_positions_count_match, detect_bar_length
-from ocr import check_ocr_server, check_ocr_api, set_ocr_port, get_ocr_server_url, crop_image_for_ocr, ocr_recognize_number, extract_number, apply_ocr_filter, apply_filters_chain, create_png_from_bgra, create_bmp_from_bgra
+from ocr import check_ocr_server, check_ocr_api, set_ocr_port, crop_image_for_ocr, ocr_recognize_number, extract_number, apply_ocr_filter, apply_filters_chain, create_png_from_bgra, create_bmp_from_bgra
 
 SRCCOPY = 0x00CC0020
 
@@ -139,7 +140,7 @@ def get_client_offset(hwnd):
     return 0, 0
 
 
-def sample_color_at_cursor(hwnd=None):
+def sample_color_at_cursor(hwnd=None, capture_method="gdi"):
     abs_x, abs_y = get_cursor_position()
     client_x, client_y = 0, 0
     if hwnd is None:
@@ -149,7 +150,12 @@ def sample_color_at_cursor(hwnd=None):
     rel_x = abs_x - client_x
     rel_y = abs_y - client_y
     try:
-        bmp_data, rx, ry, rw, rh, img_width = capture_screen_fast(hwnd=hwnd)
+        if capture_method == "dxgi":
+            bmp_data, rx, ry, rw, rh, img_width = capture_dxgi_fast(hwnd=hwnd)
+            if bmp_data is None:
+                bmp_data, rx, ry, rw, rh, img_width = capture_screen_fast(hwnd=hwnd)
+        else:
+            bmp_data, rx, ry, rw, rh, img_width = capture_screen_fast(hwnd=hwnd)
         screen_rel_x = rel_x - rx
         screen_rel_y = rel_y - ry
         if 0 <= screen_rel_x < rw and 0 <= screen_rel_y < rh:

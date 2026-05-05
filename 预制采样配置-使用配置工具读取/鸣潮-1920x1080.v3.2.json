@@ -79,7 +79,9 @@
                         "type": "python",
                         "code": "row_size = width * 4\nfor y in range(4):\n    start = y * row_size\n    for i in range(start, start + row_size, 4):\n        data[i] = 255\n        data[i+1] = 0\n        data[i+2] = 255\nfor y in range(height - 4, height):\n    start = y * row_size\n    for i in range(start, start + row_size, 4):\n        data[i] = 255\n        data[i+1] = 0\n        data[i+2] = 255"
                     }
-                ]
+                ],
+                "ocr_api_ip": "",
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "shield_bar": {
                 "enabled": false,
@@ -108,7 +110,10 @@
                         "colors": "#FFD041|#CA46FF",
                         "tolerance": 12
                     }
-                ]
+                ],
+                "drop_threshold": 0,
+                "ocr_api_ip": "",
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "overlay": {
                 "enabled": true
@@ -116,19 +121,35 @@
             "overlap": {
                 "strength_add": 1,
                 "strength_max": 200,
-                "enabled": true
+                "enabled": true,
+                "duration_multiplier": 1.5,
+                "decay_enabled": true,
+                "decay_mode": "instant",
+                "decay_value": 2,
+                "decay_percent": 10,
+                "decay_ratio_accel": 0.2,
+                "decay_script": ""
             },
             "ocr": {
                 "enabled": true,
-                "port": 1395
+                "port": 1395,
+                "health_shield_detect": false
             },
             "multi_character": {
                 "enabled": true,
                 "character_keys": "1,2,3,4",
                 "gamepad_enabled": true,
                 "gamepad_buttons": "0x0001,0x0008,0x0002,0x0004",
-                "switch_immunity_frames": 5,
+                "switch_immunity_frames": 2,
                 "switch_delay_frames": 1
+            },
+            "capture_method": "gdi",
+            "damage_detect": {
+                "enabled": true,
+                "mid_value": 7000,
+                "max_bonus": 10,
+                "formula": "default",
+                "script": ""
             }
         },
         "waveform": {

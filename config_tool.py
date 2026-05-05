@@ -9,15 +9,18 @@ import os
 import json
 import ctypes
 import threading
+import time
+import dxcam
+_dxcamInput = dxcam
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, QGroupBox,
                              QScrollArea, QMessageBox, QFileDialog, QSplitter,
                              QTextEdit, QFrame, QGridLayout, QDialog, QCheckBox, QLayout,
                              QComboBox, QFormLayout, QSpinBox, QSizePolicy,
-                             QPlainTextEdit)
+                             QPlainTextEdit, QInputDialog)
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRegularExpression, QEvent, QObject, QPoint
 from PyQt6.QtGui import (QPixmap, QImage, QColor, QPalette, QPainter, QBrush, QPen,
-                          QSyntaxHighlighter, QTextCharFormat, QFont, QKeySequence)
+                          QSyntaxHighlighter, QTextCharFormat, QFont, QKeySequence, QTextCursor)
 
 
 def get_plugin_dir():
@@ -718,6 +721,8 @@ class ConfigTool(QMainWindow):
         self.bmp_data = None
         self.img_width = 0
         self._fake_game_window = None
+        self._active_capture_method = "gdi"
+        self._visibility_deps = {}
 
         self._ocr_status_signal.connect(self._on_ocr_status_result)
         self._game_status_signal.connect(self._on_game_status_result)
@@ -754,30 +759,46 @@ class ConfigTool(QMainWindow):
         main_layout.addWidget(self.sampling_control_widget)
 
         button_layout = QHBoxLayout()
-        save_btn = QPushButton("保存配置")
+        save_btn = QPushButton("保存")
         save_btn.clicked.connect(self.save_config)
-        import_btn = QPushButton("导入配置")
+        save_btn.setFixedWidth(50)
+        reload_btn = QPushButton("重载")
+        reload_btn.setToolTip("保存配置并通知主程序重载配置")
+        reload_btn.clicked.connect(self.save_and_reload_config)
+        reload_btn.setFixedWidth(50)
+        import_btn = QPushButton("导入")
         import_btn.clicked.connect(self.import_preset_config)
+        import_btn.setFixedWidth(50)
+        export_btn = QPushButton("导出")
+        export_btn.clicked.connect(self.export_config)
+        export_btn.setFixedWidth(50)
         screenshot_test_btn = QPushButton("截图测试")
         screenshot_test_btn.clicked.connect(self.screenshot_test)
-        ocr_filter_btn = QPushButton("OCR滤镜测试")
+        screenshot_test_btn.setFixedWidth(70)
+        ocr_filter_btn = QPushButton("滤镜测试")
         ocr_filter_btn.clicked.connect(self.ocr_filter_preview)
+        ocr_filter_btn.setFixedWidth(70)
         ocr_once_btn = QPushButton("OCR测试")
         ocr_once_btn.clicked.connect(self.ocr_once)
-        import_screenshot_btn = QPushButton("导入游戏截图")
+        ocr_once_btn.setFixedWidth(75)
+        import_screenshot_btn = QPushButton("导入截图")
         import_screenshot_btn.clicked.connect(self.import_game_screenshot)
-        full_screenshot_btn = QPushButton("截图整个游戏")
+        import_screenshot_btn.setFixedWidth(75)
+        full_screenshot_btn = QPushButton("截图游戏")
         full_screenshot_btn.clicked.connect(self.full_screenshot)
+        full_screenshot_btn.setFixedWidth(70)
         button_layout.addWidget(save_btn)
+        button_layout.addWidget(reload_btn)
         button_layout.addWidget(import_btn)
+        button_layout.addWidget(export_btn)
         button_layout.addWidget(screenshot_test_btn)
         button_layout.addWidget(ocr_filter_btn)
         button_layout.addWidget(ocr_once_btn)
         button_layout.addWidget(import_screenshot_btn)
         button_layout.addWidget(full_screenshot_btn)
-        self._top_btn = QPushButton("📌置顶")
+        self._top_btn = QPushButton("📌")
         self._top_btn.setCheckable(True)
-        self._top_btn.setFixedWidth(60)
+        self._top_btn.setFixedWidth(40)
         self._top_btn.toggled.connect(lambda checked: self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, checked) or self.show())
         button_layout.addStretch()
         button_layout.addWidget(self._top_btn)
@@ -785,8 +806,7 @@ class ConfigTool(QMainWindow):
 
         status_layout = QHBoxLayout()
         self.status_label = QLabel("状态: 就绪")
-        status_layout.addWidget(QLabel("状态:"))
-        status_layout.addWidget(self.status_label, stretch=1)
+        status_layout.addWidget(self.status_label)
         main_layout.addLayout(status_layout)
 
     def create_config_group(self, title, config_key, enable_path=None, enable_label=None):
@@ -878,7 +898,8 @@ class ConfigTool(QMainWindow):
 
     def create_field_row(self, layout, row, label_text, config_path, field_type="text",
                          is_position=False, is_color=False, is_boolean=False, group_key=None, ocr_related=False,
-                         max_width=None, paired=False):
+                         max_width=None, paired=False, dropdown_options=None,
+                         visible_when=None, depends_on=None):
         row_widget = QWidget()
         row_widget.field_config_path = config_path
         row_widget.ocr_related = ocr_related
@@ -907,6 +928,35 @@ class ConfigTool(QMainWindow):
                 h_layout.addStretch()
             layout.addWidget(row_widget, row, 0, 1, 5)
             row_widget.checkbox = checkbox
+            self._register_visibility(row_widget, visible_when, depends_on)
+            return row_widget
+
+        if field_type == "dropdown" and dropdown_options:
+            combo = QComboBox()
+            combo.field_config_path = config_path
+            combo.field_type = "dropdown"
+            combo.group_key = group_key
+            combo.ocr_related = ocr_related
+            combo._dropdown_value_map = {}
+            current_value = self.get_config_value(config_path)
+            select_index = 0
+            for i, opt in enumerate(dropdown_options):
+                if isinstance(opt, (list, tuple)) and len(opt) >= 2:
+                    display_text, opt_value = opt[0], opt[1]
+                else:
+                    display_text = opt_value = str(opt)
+                combo.addItem(display_text, opt_value)
+                combo._dropdown_value_map[display_text] = opt_value
+                if current_value is not None and str(opt_value).lower() == str(current_value).lower():
+                    select_index = i
+            combo.setCurrentIndex(select_index)
+            combo.currentIndexChanged.connect(lambda idx, cb=combo: self.on_dropdown_changed(cb, idx))
+            h_layout.addWidget(combo)
+            if not paired:
+                h_layout.addStretch()
+            layout.addWidget(row_widget, row, 0, 1, 5)
+            row_widget.combo = combo
+            self._register_visibility(row_widget, visible_when, depends_on)
             return row_widget
 
         if is_position or is_color:
@@ -966,6 +1016,7 @@ class ConfigTool(QMainWindow):
         if is_position or is_color:
             row_widget.btn = btn
 
+        self._register_visibility(row_widget, visible_when, depends_on)
         return row_widget
 
     def create_paired_row(self, layout, row, fields):
@@ -980,6 +1031,44 @@ class ConfigTool(QMainWindow):
         layout.addWidget(paired_widget, row, 0, 1, 5)
         return paired_widget
 
+    def _register_visibility(self, widget, visible_when, depends_on):
+        if visible_when is None:
+            return
+        widget.visible_when = visible_when
+        if depends_on is None:
+            depends_on = []
+        elif isinstance(depends_on, str):
+            depends_on = [depends_on]
+        widget._vis_depends_on = depends_on
+        for dep_path in depends_on:
+            if dep_path not in self._visibility_deps:
+                self._visibility_deps[dep_path] = []
+            self._visibility_deps[dep_path].append(widget)
+
+    def _refresh_visibility_for(self, config_path):
+        for widget in self._visibility_deps.get(config_path, []):
+            try:
+                if hasattr(widget, 'visible_when') and callable(widget.visible_when):
+                    result = widget.visible_when()
+                    widget.setVisible(bool(result))
+            except RuntimeError:
+                continue
+
+    def _refresh_all_visibility(self):
+        seen = set()
+        for widgets in self._visibility_deps.values():
+            for widget in widgets:
+                wid = id(widget)
+                if wid in seen:
+                    continue
+                seen.add(wid)
+                try:
+                    if hasattr(widget, 'visible_when') and callable(widget.visible_when):
+                        result = widget.visible_when()
+                        widget.setVisible(bool(result))
+                except RuntimeError:
+                    continue
+
     def on_group_enable_changed(self, checkbox, state, group):
         path = checkbox.field_config_path
         checked = state == Qt.CheckState.Checked.value
@@ -990,24 +1079,70 @@ class ConfigTool(QMainWindow):
 
     def on_checkbox_changed(self, checkbox, state):
         path = checkbox.field_config_path
-        self.set_config_value(path, state == Qt.CheckState.Checked.value)
-        
-        if path.endswith('ocr_end_trigger'):
-            ocr_enabled = self.get_config_value('ocr.enabled')
-            if ocr_enabled:
-                if 'health_bar' in path:
-                    self._toggle_end_position_visibility(self.health_bar_widgets, state == Qt.CheckState.Checked.value)
-                elif 'shield_bar' in path:
-                    self._toggle_end_position_visibility(self.shield_bar_widgets, state == Qt.CheckState.Checked.value)
-    
-    def _toggle_end_position_visibility(self, widgets_dict, end_trigger_enabled):
-        if 'end' in widgets_dict:
-            widgets_dict['end'].setVisible(end_trigger_enabled)
-        ocr_enabled = self.get_config_value('ocr.enabled')
-        if ocr_enabled:
-            for key in ('start', 'colors', 'tolerance'):
-                if key in widgets_dict:
-                    widgets_dict[key].setVisible(end_trigger_enabled)
+        checked = state == Qt.CheckState.Checked.value
+        self.set_config_value(path, checked)
+        self._refresh_visibility_for(path)
+
+    def on_dropdown_changed(self, combo, index):
+        path = combo.field_config_path
+        value = combo.itemData(index)
+        if value is not None:
+            self.set_config_value(path, value)
+        self._refresh_visibility_for(path)
+        if path == "capture_method":
+            self._update_capture_method(value)
+
+    def _update_capture_method(self, method_value):
+        if method_value == "dxgi":
+            if not lib.is_dxgi_available():
+                self.status_label.setText("状态: DXGI 不可用 (dxcam 未安装)，已回退到 GDI")
+                self._active_capture_method = "gdi"
+                if hasattr(self, 'capture_method_combo'):
+                    for i in range(self.capture_method_combo.count()):
+                        if self.capture_method_combo.itemData(i) == "gdi":
+                            self.capture_method_combo.setCurrentIndex(i)
+                            break
+            else:
+                self._active_capture_method = "dxgi"
+                self.status_label.setText("状态: 截图方式已切换为 DXGI")
+        elif method_value == "gdi":
+            self._active_capture_method = "gdi"
+            self.status_label.setText("状态: 截图方式已切换为 GDI")
+        else:
+            self._active_capture_method = "gdi"
+            self.status_label.setText("状态: 截图方式已切换为 GDI")
+        self._release_capture_resources()
+        self._update_dxgi_status()
+
+    def _update_dxgi_status(self):
+        if hasattr(self, '_dxgi_status_label'):
+            cfg = self.get_config_value("capture_method") or "gdi"
+            dxgi_ok = lib.is_dxgi_available()
+            if cfg == "gdi":
+                self._dxgi_status_label.setText("● GDI")
+                self._dxgi_status_label.setStyleSheet("color: #888; font-size: 11px;")
+            elif cfg == "dxgi" and dxgi_ok:
+                self._dxgi_status_label.setText("● DXGI")
+                self._dxgi_status_label.setStyleSheet("color: #4CAF50; font-size: 11px;")
+            else:
+                self._dxgi_status_label.setText("● DXGI不可用 已回退GDI")
+                self._dxgi_status_label.setStyleSheet("color: #FF9800; font-size: 11px;")
+
+    def _release_capture_resources(self):
+        if self._active_capture_method == "dxgi":
+            try:
+                lib.release_dxgi()
+            except Exception:
+                pass
+
+    def _do_capture(self, region=None, hwnd=None):
+        if self._active_capture_method == "dxgi":
+            result = lib.capture_dxgi_fast(region, hwnd=hwnd)
+            if result and result[0] is not None:
+                return result
+            result = lib.capture_screen_fast(region, hwnd=hwnd)
+            return result
+        return lib.capture_screen_fast(region, hwnd=hwnd)
 
     def on_ocr_toggled(self, state):
         """OCR启用/禁用时的显示/隐藏逻辑"""
@@ -1049,7 +1184,6 @@ class ConfigTool(QMainWindow):
                 self._ocr_test_timer.start(500)
 
     def _update_ocr_ui_visibility(self, ocr_enabled):
-        """根据OCR启用状态更新UI可见性 - 使用已保存的widget引用"""
         if not hasattr(self, 'group_widgets'):
             return
 
@@ -1057,47 +1191,13 @@ class ConfigTool(QMainWindow):
         if plus_group:
             plus_group.setVisible(not ocr_enabled)
 
-        self._toggle_bar_widgets_visibility(self.health_bar_widgets, ocr_enabled)
-        self._toggle_bar_widgets_visibility(self.shield_bar_widgets, ocr_enabled)
-
-        # 控制OCR端口配置的可见性
         if hasattr(self, 'ocr_port_row'):
             self.ocr_port_row.setVisible(ocr_enabled)
 
-        # 控制OCR-盾量血量同时检测配置的可见性
         if hasattr(self, 'ocr_health_shield_detect_row'):
             self.ocr_health_shield_detect_row.setVisible(ocr_enabled)
 
-    def _toggle_bar_widgets_visibility(self, widgets_dict, ocr_enabled):
-        ocr_fields = {'ocr_top_left', 'ocr_bottom_right', 'ocr_filters'}
-        traditional_fields = {'start', 'colors', 'tolerance'}
-        ocr_hidden_fields = {'sample_points'}
-        end_trigger_field = 'ocr_end_trigger'
-        end_position_field = 'end'
-
-        ocr_end_trigger_enabled = True
-        if end_trigger_field in widgets_dict:
-            row_widget = widgets_dict[end_trigger_field]
-            if hasattr(row_widget, 'checkbox'):
-                ocr_end_trigger_enabled = row_widget.checkbox.isChecked()
-
-        for key, widget in widgets_dict.items():
-            if key in ocr_fields:
-                widget.setVisible(ocr_enabled)
-            elif key in traditional_fields:
-                if ocr_enabled:
-                    widget.setVisible(ocr_end_trigger_enabled)
-                else:
-                    widget.setVisible(True)
-            elif key in ocr_hidden_fields:
-                widget.setVisible(not ocr_enabled)
-            elif key == end_trigger_field:
-                widget.setVisible(ocr_enabled)
-            elif key == end_position_field:
-                if ocr_enabled:
-                    widget.setVisible(ocr_end_trigger_enabled)
-                else:
-                    widget.setVisible(True)
+        self._refresh_visibility_for('ocr.enabled')
     
     def _get_widget_row(self, layout, widget):
         """获取控件在布局中的行号"""
@@ -1134,7 +1234,7 @@ class ConfigTool(QMainWindow):
 
     def on_field_changed(self, line_edit, text):
         path = line_edit.field_config_path
-        field_type = line_edit.field_type
+        field_type = getattr(line_edit, 'field_type', 'text')
 
         try:
             if 'position' in field_type or field_type == 'coordinate':
@@ -1217,14 +1317,33 @@ class ConfigTool(QMainWindow):
 
         self.build_config_ui()
 
+        capture_method_config = self.get_config_value("capture_method") or "gdi"
+        if capture_method_config == "dxgi":
+            if lib.is_dxgi_available():
+                self._active_capture_method = "dxgi"
+            else:
+                self._active_capture_method = "gdi"
+        else:
+            self._active_capture_method = "gdi"
+
+        self._update_dxgi_status()
+
     def build_config_ui(self):
         while self.config_layout.count():
             item = self.config_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
 
+        self._visibility_deps.clear()
+
         from config import _migrate_legacy_filters
         self.config = _migrate_legacy_filters(self.config)
+
+        cfg_from = self.config.get('cfgFrom', '')
+        if cfg_from:
+            self.setWindowTitle(f"HitElectric 配置工具 - {os.path.basename(cfg_from)}")
+        else:
+            self.setWindowTitle("HitElectric 配置工具")
 
         self.group_widgets = {}
 
@@ -1292,7 +1411,6 @@ class ConfigTool(QMainWindow):
         self.ocr_health_shield_detect_row = self.create_field_row(game_layout, row, "OCR-盾量血量同时检测血条存在:", "ocr.health_shield_detect",
                                                                     field_type="boolean", is_boolean=True, ocr_related=True)
         row += 1
-
         self.create_field_row(game_layout, row, "区域左上角:", "game.region.top_left",
                               field_type="coordinate", is_position=True, group_key="game.region")
         row += 1
@@ -1302,11 +1420,68 @@ class ConfigTool(QMainWindow):
         self.create_field_row(game_layout, row, "扫描间隔:", "scan_interval",
                               field_type="number")
         row += 1
-        self.create_field_row(game_layout, row, "开关键:", "toggle_key",
-                              field_type="text")
+
+        toggle_row = QWidget()
+        toggle_h = QHBoxLayout(toggle_row)
+        toggle_h.setContentsMargins(0, 0, 0, 0)
+        toggle_h.setSpacing(4)
+        toggle_h.addWidget(QLabel("开关键:"))
+        toggle_key_edit = QLineEdit(str(self.get_config_value("toggle_key") or "f9"))
+        toggle_key_edit.setMaximumWidth(120)
+        toggle_key_edit.setPlaceholderText("按键名 / 按键码(如0x72)")
+        toggle_key_edit.field_config_path = "toggle_key"
+        toggle_key_edit.textChanged.connect(lambda t, e=toggle_key_edit: self.on_field_changed(e, t))
+        toggle_h.addWidget(toggle_key_edit)
+        toggle_sample_btn = QPushButton("采样")
+        toggle_sample_btn.setMaximumWidth(50)
+        toggle_sample_btn.clicked.connect(lambda _, e=toggle_key_edit: self._sample_key(e))
+        toggle_h.addWidget(toggle_sample_btn)
+        toggle_h.addStretch()
+        game_layout.addWidget(toggle_row, row, 0, 1, 5)
         row += 1
-        self.create_field_row(game_layout, row, "设置模式键:", "setting_mode_key",
-                              field_type="text")
+
+        setting_row = QWidget()
+        setting_h = QHBoxLayout(setting_row)
+        setting_h.setContentsMargins(0, 0, 0, 0)
+        setting_h.setSpacing(4)
+        setting_h.addWidget(QLabel("设置模式键:"))
+        setting_key_edit = QLineEdit(str(self.get_config_value("setting_mode_key") or "f10"))
+        setting_key_edit.setMaximumWidth(120)
+        setting_key_edit.setPlaceholderText("按键名 / 按键码(如0x7B)")
+        setting_key_edit.field_config_path = "setting_mode_key"
+        setting_key_edit.textChanged.connect(lambda t, e=setting_key_edit: self.on_field_changed(e, t))
+        setting_h.addWidget(setting_key_edit)
+        setting_sample_btn = QPushButton("采样")
+        setting_sample_btn.setMaximumWidth(50)
+        setting_sample_btn.clicked.connect(lambda _, e=setting_key_edit: self._sample_key(e))
+        setting_h.addWidget(setting_sample_btn)
+        setting_h.addStretch()
+        game_layout.addWidget(setting_row, row, 0, 1, 5)
+        row += 1
+        capture_method_row = QWidget()
+        capture_method_h = QHBoxLayout(capture_method_row)
+        capture_method_h.setContentsMargins(0, 0, 0, 0)
+        capture_method_h.setSpacing(4)
+        capture_method_label = QLabel("截图方式:")
+        capture_method_h.addWidget(capture_method_label)
+        current_method = self.get_config_value("capture_method") or "gdi"
+        capture_method_combo = QComboBox()
+        capture_method_combo.field_config_path = "capture_method"
+        for opt in [("GDI+BitBlt", "gdi"), ("DXGI", "dxgi")]:
+            capture_method_combo.addItem(opt[0], opt[1])
+        for i in range(capture_method_combo.count()):
+            if capture_method_combo.itemData(i) == current_method:
+                capture_method_combo.setCurrentIndex(i)
+                break
+        capture_method_combo.currentIndexChanged.connect(lambda idx: self.on_dropdown_changed(capture_method_combo, idx))
+        capture_method_h.addWidget(capture_method_combo)
+        self.capture_method_combo = capture_method_combo
+        self._dxgi_status_label = QLabel()
+        self._dxgi_status_label.setStyleSheet("font-size: 11px;")
+        capture_method_h.addWidget(self._dxgi_status_label)
+        capture_method_h.addStretch()
+        game_layout.addWidget(capture_method_row, row, 0, 1, 5)
+        self._update_dxgi_status()
         row += 1
 
         self.config_layout.addWidget(game_group)
@@ -1349,12 +1524,15 @@ class ConfigTool(QMainWindow):
         self.group_widgets['health_group'] = health_group
         self.health_bar_widgets = {}
         row = 0
-        # --- OCR配置区域 ---
         self.health_bar_widgets['ocr_top_left'] = self.create_field_row(health_layout, row, "OCR-数字左上角:", "health_bar.ocr_top_left",
-                                                                        field_type="coordinate", is_position=True, group_key="health_bar", ocr_related=True)
+                                                                        field_type="coordinate", is_position=True, group_key="health_bar", ocr_related=True,
+                                                                        visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                        depends_on='ocr.enabled')
         row += 1
         self.health_bar_widgets['ocr_bottom_right'] = self.create_field_row(health_layout, row, "OCR-数字右下角:", "health_bar.ocr_bottom_right",
-                                                                            field_type="coordinate", is_position=True, group_key="health_bar", ocr_related=True)
+                                                                            field_type="coordinate", is_position=True, group_key="health_bar", ocr_related=True,
+                                                                            visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                            depends_on='ocr.enabled')
         row += 1
 
         filter_row_widget = QWidget()
@@ -1375,26 +1553,40 @@ class ConfigTool(QMainWindow):
         filter_row_layout.addWidget(self.health_filter_summary, stretch=1)
         health_layout.addWidget(filter_row_widget, row, 0, 1, 5)
         self.health_bar_widgets['ocr_filters'] = filter_row_widget
+        self._register_visibility(filter_row_widget,
+                                  visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                  depends_on='ocr.enabled')
         row += 1
 
         self.health_bar_widgets['ocr_end_trigger'] = self.create_field_row(health_layout, row, "血条框填满 但 血量数值下降 时不触发电击:", "health_bar.ocr_end_trigger",
-                                                                            field_type="boolean", is_boolean=True)
+                                                                            field_type="boolean", is_boolean=True,
+                                                                            visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                            depends_on='ocr.enabled')
         row += 1
-        # --- 传统配置区域（用于起始/结束点检测） ---
         self.health_bar_widgets['start'] = self.create_field_row(health_layout, row, "起始位置:", "health_bar.start",
-                                                                  field_type="coordinate", is_position=True, group_key="health_bar")
+                                                                  field_type="coordinate", is_position=True, group_key="health_bar",
+                                                                  visible_when=lambda: not self.get_config_value('ocr.enabled'),
+                                                                  depends_on='ocr.enabled')
         row += 1
         self.health_bar_widgets['end'] = self.create_field_row(health_layout, row, "结束位置:", "health_bar.end",
-                                                                field_type="coordinate", is_position=True, group_key="health_bar")
+                                                                field_type="coordinate", is_position=True, group_key="health_bar",
+                                                                visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('health_bar.ocr_end_trigger'),
+                                                                depends_on=['ocr.enabled', 'health_bar.ocr_end_trigger'])
         row += 1
         self.health_bar_widgets['colors'] = self.create_field_row(health_layout, row, "血条颜色:", "health_bar.colors",
-                                                                   field_type="colors", is_color=True, group_key="health_bar")
+                                                                   field_type="colors", is_color=True, group_key="health_bar",
+                                                                   visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('health_bar.ocr_end_trigger'),
+                                                                   depends_on=['ocr.enabled', 'health_bar.ocr_end_trigger'])
         row += 1
         self.health_bar_widgets['tolerance'] = self.create_field_row(health_layout, row, "容差:", "health_bar.tolerance",
-                                                                     field_type="number")
+                                                                     field_type="number",
+                                                                     visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('health_bar.ocr_end_trigger'),
+                                                                     depends_on=['ocr.enabled', 'health_bar.ocr_end_trigger'])
         row += 1
         self.health_bar_widgets['sample_points'] = self.create_field_row(health_layout, row, "采样点数:", "health_bar.sample_points",
-                                                                         field_type="number")
+                                                                         field_type="number",
+                                                                         visible_when=lambda: not self.get_config_value('ocr.enabled'),
+                                                                         depends_on='ocr.enabled')
         row += 1
         self.health_bar_widgets['strength'] = self.create_field_row(health_layout, row, "强度A:", "health_bar.strength",
                                                                      field_type="number")
@@ -1411,12 +1603,15 @@ class ConfigTool(QMainWindow):
         self.group_widgets['shield_group'] = shield_group
         self.shield_bar_widgets = {}
         row = 0
-        # --- OCR配置区域 ---
         self.shield_bar_widgets['ocr_top_left'] = self.create_field_row(shield_layout, row, "OCR-数字左上角:", "shield_bar.ocr_top_left",
-                                                                        field_type="coordinate", is_position=True, group_key="shield_bar", ocr_related=True)
+                                                                        field_type="coordinate", is_position=True, group_key="shield_bar", ocr_related=True,
+                                                                        visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                        depends_on='ocr.enabled')
         row += 1
         self.shield_bar_widgets['ocr_bottom_right'] = self.create_field_row(shield_layout, row, "OCR-数字右下角:", "shield_bar.ocr_bottom_right",
-                                                                            field_type="coordinate", is_position=True, group_key="shield_bar", ocr_related=True)
+                                                                            field_type="coordinate", is_position=True, group_key="shield_bar", ocr_related=True,
+                                                                            visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                            depends_on='ocr.enabled')
         row += 1
 
         shield_filter_row = QWidget()
@@ -1437,26 +1632,40 @@ class ConfigTool(QMainWindow):
         shield_filter_layout.addWidget(self.shield_filter_summary, stretch=1)
         shield_layout.addWidget(shield_filter_row, row, 0, 1, 5)
         self.shield_bar_widgets['ocr_filters'] = shield_filter_row
+        self._register_visibility(shield_filter_row,
+                                  visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                  depends_on='ocr.enabled')
         row += 1
 
         self.shield_bar_widgets['ocr_end_trigger'] = self.create_field_row(shield_layout, row, "盾条框填满 但 盾量数值下降 时不触发电击:", "shield_bar.ocr_end_trigger",
-                                                                            field_type="boolean", is_boolean=True)
+                                                                            field_type="boolean", is_boolean=True,
+                                                                            visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                            depends_on='ocr.enabled')
         row += 1
-        # --- 传统配置区域（用于起始/结束点检测） ---
         self.shield_bar_widgets['start'] = self.create_field_row(shield_layout, row, "起始位置:", "shield_bar.start",
-                                                                  field_type="coordinate", is_position=True, group_key="shield_bar")
+                                                                  field_type="coordinate", is_position=True, group_key="shield_bar",
+                                                                  visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('shield_bar.blocks_health'),
+                                                                  depends_on=['ocr.enabled', 'shield_bar.blocks_health'])
         row += 1
         self.shield_bar_widgets['end'] = self.create_field_row(shield_layout, row, "结束位置:", "shield_bar.end",
-                                                                field_type="coordinate", is_position=True, group_key="shield_bar")
+                                                                field_type="coordinate", is_position=True, group_key="shield_bar",
+                                                                visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('shield_bar.ocr_end_trigger'),
+                                                                depends_on=['ocr.enabled', 'shield_bar.ocr_end_trigger'])
         row += 1
         self.shield_bar_widgets['colors'] = self.create_field_row(shield_layout, row, "盾条颜色:", "shield_bar.colors",
-                                                                   field_type="colors", is_color=True, group_key="shield_bar")
+                                                                   field_type="colors", is_color=True, group_key="shield_bar",
+                                                                   visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('shield_bar.ocr_end_trigger') or self.get_config_value('shield_bar.blocks_health'),
+                                                                   depends_on=['ocr.enabled', 'shield_bar.ocr_end_trigger', 'shield_bar.blocks_health'])
         row += 1
         self.shield_bar_widgets['tolerance'] = self.create_field_row(shield_layout, row, "容差:", "shield_bar.tolerance",
-                                                                     field_type="number")
+                                                                     field_type="number",
+                                                                     visible_when=lambda: not self.get_config_value('ocr.enabled') or self.get_config_value('shield_bar.ocr_end_trigger') or self.get_config_value('shield_bar.blocks_health'),
+                                                                     depends_on=['ocr.enabled', 'shield_bar.ocr_end_trigger', 'shield_bar.blocks_health'])
         row += 1
         self.shield_bar_widgets['sample_points'] = self.create_field_row(shield_layout, row, "采样点数:", "shield_bar.sample_points",
-                                                                         field_type="number")
+                                                                         field_type="number",
+                                                                         visible_when=lambda: not self.get_config_value('ocr.enabled'),
+                                                                         depends_on='ocr.enabled')
         row += 1
         self.shield_bar_widgets['strength'] = self.create_field_row(shield_layout, row, "强度A:", "shield_bar.strength",
                                                                      field_type="number")
@@ -1464,9 +1673,13 @@ class ConfigTool(QMainWindow):
         self.shield_bar_widgets['strength_b'] = self.create_field_row(shield_layout, row, "强度B:", "shield_bar.strength_b",
                                                                        field_type="number")
         row += 1
-        # 新增配置：盾存在时不扣血
         self.shield_bar_widgets['blocks_health'] = self.create_field_row(shield_layout, row, "盾存在时阻止扣血:", "shield_bar.blocks_health",
-                                                                          field_type="boolean", is_boolean=True)
+                                                                          field_type="boolean", is_boolean=True,
+                                                                          visible_when=lambda: self.get_config_value('ocr.enabled'),
+                                                                          depends_on='ocr.enabled')
+        row += 1
+        self.shield_bar_widgets['drop_threshold'] = self.create_field_row(shield_layout, row, "盾量减少阈值(0=禁用):", "shield_bar.drop_threshold",
+                                                                           field_type="number")
         row += 1
         self.config_layout.addWidget(shield_group)
 
@@ -1481,6 +1694,52 @@ class ConfigTool(QMainWindow):
         self.create_field_row(overlap_layout, row, "时间叠加倍数:", "overlap.duration_multiplier",
                               field_type="number")
         row += 1
+        self.create_field_row(overlap_layout, row, "自然回落:", "overlap.decay_enabled",
+                              is_boolean=True)
+        row += 1
+        decay_mode_row = self.create_field_row(overlap_layout, row, "回落方式:", "overlap.decay_mode",
+                              field_type="dropdown",
+                              dropdown_options=[
+                                  ("瞬间重置", "instant"),
+                                  ("缓慢降低(数值)", "linear"),
+                                  ("缓慢降低(百分比)", "percent"),
+                                  ("比值加速", "ratio_accel"),
+                                  ("自定义脚本", "script"),
+                              ],
+                              visible_when=lambda: self.get_config_value('overlap.decay_enabled'),
+                              depends_on='overlap.decay_enabled')
+        row += 1
+        decay_value_row = self.create_field_row(overlap_layout, row, "每次降低数值:", "overlap.decay_value",
+                              field_type="number",
+                              visible_when=lambda: self.get_config_value('overlap.decay_enabled') and self.get_config_value('overlap.decay_mode') == 'linear',
+                              depends_on=['overlap.decay_enabled', 'overlap.decay_mode'])
+        row += 1
+        decay_percent_row = self.create_field_row(overlap_layout, row, "每次降低百分比:", "overlap.decay_percent",
+                              field_type="number",
+                              visible_when=lambda: self.get_config_value('overlap.decay_enabled') and self.get_config_value('overlap.decay_mode') == 'percent',
+                              depends_on=['overlap.decay_enabled', 'overlap.decay_mode'])
+        row += 1
+        decay_ratio_row = self.create_field_row(overlap_layout, row, "比值加速因子:", "overlap.decay_ratio_accel",
+                              field_type="number",
+                              visible_when=lambda: self.get_config_value('overlap.decay_enabled') and self.get_config_value('overlap.decay_mode') == 'ratio_accel',
+                              depends_on=['overlap.decay_enabled', 'overlap.decay_mode'])
+        row += 1
+
+        decay_script_btn = QPushButton("修改回落脚本")
+        decay_script_btn.clicked.connect(self._edit_decay_script)
+        script_row = QWidget()
+        script_h = QHBoxLayout(script_row)
+        script_h.setContentsMargins(0, 0, 0, 0)
+        script_label = QLabel("自定义回落脚本:")
+        script_h.addWidget(script_label)
+        script_h.addWidget(decay_script_btn)
+        script_h.addStretch()
+        overlap_layout.addWidget(script_row, row, 0, 1, 5)
+        self._register_visibility(script_row,
+                                  visible_when=lambda: self.get_config_value('overlap.decay_enabled') and self.get_config_value('overlap.decay_mode') == 'script',
+                                  depends_on=['overlap.decay_enabled', 'overlap.decay_mode'])
+        row += 1
+
         self.config_layout.addWidget(overlap_group)
 
         damage_group, damage_layout, _, _ = self.create_config_group("受伤程度检测", "damage_detect", enable_path="damage_detect.enabled")
@@ -1490,6 +1749,27 @@ class ConfigTool(QMainWindow):
         row += 1
         self.create_field_row(damage_layout, row, "强度增幅上限:", "damage_detect.max_bonus",
                               field_type="number")
+        row += 1
+        self.create_field_row(damage_layout, row, "检测公式:", "damage_detect.formula",
+                              field_type="dropdown",
+                              dropdown_options=[
+                                  ("默认公式", "default"),
+                                  ("自定义Python代码", "script"),
+                              ])
+        row += 1
+        damage_script_btn = QPushButton("修改检测脚本")
+        damage_script_btn.clicked.connect(self._edit_damage_script)
+        damage_script_row = QWidget()
+        damage_script_h = QHBoxLayout(damage_script_row)
+        damage_script_h.setContentsMargins(0, 0, 0, 0)
+        damage_script_label = QLabel("自定义检测脚本:")
+        damage_script_h.addWidget(damage_script_label)
+        damage_script_h.addWidget(damage_script_btn)
+        damage_script_h.addStretch()
+        damage_layout.addWidget(damage_script_row, row, 0, 1, 5)
+        self._register_visibility(damage_script_row,
+                                  visible_when=lambda: self.get_config_value('damage_detect.enabled') and self.get_config_value('damage_detect.formula') == 'script',
+                                  depends_on=['damage_detect.enabled', 'damage_detect.formula'])
         row += 1
         self.config_layout.addWidget(damage_group)
 
@@ -1634,6 +1914,10 @@ class ConfigTool(QMainWindow):
         if ocr_enabled is not None:
             self._update_ocr_ui_visibility(bool(ocr_enabled))
 
+        self._refresh_all_visibility()
+
+        self._update_dxgi_status()
+
         self.config_layout.addStretch()
 
         self._update_filter_summaries()
@@ -1729,7 +2013,7 @@ class ConfigTool(QMainWindow):
             self.status_label.setText("状态: 正在预热截图资源...")
             QApplication.processEvents()
             try:
-                self.bmp_data, rx, ry, rw, rh, self.img_width = lib.capture_screen_fast(hwnd=self.game_hwnd)
+                self.bmp_data, rx, ry, rw, rh, self.img_width = self._do_capture(hwnd=self.game_hwnd)
                 self.capture_region = [rx, ry, rw, rh]
                 self.status_label.setText(f"状态: 截图资源已准备就绪 ({rw}x{rh})")
             except Exception as e:
@@ -1824,7 +2108,7 @@ class ConfigTool(QMainWindow):
         rel_x = abs_x - client_offset_x
         rel_y = abs_y - client_offset_y
 
-        sample_result = lib.sample_color_at_cursor(hwnd=self.game_hwnd)
+        sample_result = lib.sample_color_at_cursor(hwnd=self.game_hwnd, capture_method=self._active_capture_method)
         pixel = sample_result['color']
         hex_color = sample_result['hex_color']
 
@@ -1968,7 +2252,7 @@ class ConfigTool(QMainWindow):
             height = max(10, bottom_right[1] - top_left[1])
             self.capture_region = [int(x), int(y), int(width), int(height)]
 
-        result = lib.capture_screen_fast(self.capture_region, hwnd=self.game_hwnd)
+        result = self._do_capture(self.capture_region, hwnd=self.game_hwnd)
         if result and len(result) >= 6:
             self.bmp_data, rx, ry, rw, rh, img_width = result
             self.img_width = img_width
@@ -2307,7 +2591,7 @@ class ConfigTool(QMainWindow):
                     if not self.game_hwnd:
                         self.game_hwnd = lib.get_game_window(process_title=game_title)
                     if self.game_hwnd:
-                        bmp, rx, ry, rw, rh, iw = lib.capture_screen_fast(hwnd=self.game_hwnd)
+                        bmp, rx, ry, rw, rh, iw = self._do_capture(hwnd=self.game_hwnd)
                         if bmp:
                             self.bmp_data = bmp
                             self.img_width = iw
@@ -2668,6 +2952,9 @@ class ConfigTool(QMainWindow):
                 iter_spin.valueChanged.connect(_update_iter)
 
             elif f_type == "python":
+                hint_label = QLabel("可用变量: data(bytearray), width, height, np(numpy), np_data(ndarray h×w×4 BGRA)")
+                hint_label.setStyleSheet("color: #888; font-size: 10px; padding: 2px;")
+                layout.addRow(hint_label)
                 code_edit = QPlainTextEdit()
                 code_edit.setPlainText(f.get("code", ""))
                 code_edit.setMinimumHeight(180)
@@ -3556,6 +3843,10 @@ class ConfigTool(QMainWindow):
         def _toggle_list():
             vis = not steps_container.isVisible()
             steps_container.setVisible(vis)
+            if vis:
+                steps_container.setMaximumHeight(16777215)
+            else:
+                steps_container.setMaximumHeight(0)
             list_toggle_btn.setText("▼ 步骤列表" if vis else "▶ 步骤列表")
 
         list_toggle_btn.clicked.connect(_toggle_list)
@@ -4067,8 +4358,137 @@ class ConfigTool(QMainWindow):
             with open(config_path, 'w', encoding='utf-8') as f:
                 json.dump(save_data, f, ensure_ascii=False, indent=4)
             QMessageBox.information(self, "成功", f"配置已保存到:\n{config_path}")
+            return True
         except Exception as e:
             QMessageBox.warning(self, "错误", f"保存失败: {e}")
+            return False
+
+    def save_and_reload_config(self):
+        """保存配置并触发主程序重载"""
+        if not self.save_config():
+            return
+
+        trigger_file = os.path.join(_plugin_dir, ".reload_trigger")
+        try:
+            with open(trigger_file, 'w', encoding='utf-8') as f:
+                f.write(str(time.time()))
+            self.status_label.setText("状态: 配置已保存，已通知主程序重载")
+            QMessageBox.information(self, "成功", "配置已保存并通知主程序重载\n主程序将在约1秒内应用新配置")
+        except Exception as e:
+            self.status_label.setText(f"状态: 配置已保存，但重载通知失败: {e}")
+            QMessageBox.warning(self, "警告", f"配置已保存，但无法通知主程序重载:\n{e}")
+
+    def _edit_decay_script(self):
+        current_script = self.get_config_value("overlap.decay_script") or ""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("自定义回落脚本")
+        dialog.setMinimumSize(500, 350)
+        layout = QVBoxLayout(dialog)
+
+        hint_label = QLabel("可用变量: accumulated(当前累加值), strength_max(最大强度), strength_add(每次增加)\n"
+                           "           initial_overlap_time(最初叠加时间), overlap_count(叠加次数)\n"
+                           "           last_overlap_time(最后叠加时间), now(当前时间)\n"
+                           "可用函数: max, min, abs, int, float, round\n"
+                           "需设置 accumulated 为新值")
+        hint_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(hint_label)
+
+        code_edit = QPlainTextEdit()
+        code_edit.setPlainText(current_script if current_script else "")
+        font = QFont("Consolas", 10)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        code_edit.setFont(font)
+        code_edit.setStyleSheet("QPlainTextEdit { background-color: #1A1B1D; color: #d4d4d4; }")
+        highlighter = PythonSyntaxHighlighter(code_edit.document())
+        code_edit.highlighter = highlighter
+        code_edit.moveCursor(QTextCursor.MoveOperation.Start)
+        layout.addWidget(code_edit)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("确定")
+        cancel_btn = QPushButton("取消")
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_script = code_edit.toPlainText()
+            self.set_config_value("overlap.decay_script", new_script)
+
+    def _edit_damage_script(self):
+        current_script = self.get_config_value("damage_detect.script") or ""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("自定义受伤程度检测脚本")
+        dialog.setMinimumSize(550, 400)
+        layout = QVBoxLayout(dialog)
+
+        hint_label = QLabel("可用变量: lost_hp(损失血量), mid_value(血量中间数), max_bonus(强度增幅上限)\n"
+                           "可用函数: max, min, abs, int, float, round\n"
+                           "需设置 result 为计算出的强度增幅值")
+        hint_label.setStyleSheet("color: #888; font-size: 11px;")
+        layout.addWidget(hint_label)
+
+        default_script = (
+            "# 默认受伤程度检测公式 (阶段性公式)\n"
+            "# lost_hp: 损失血量, mid_value: 血量中间数, max_bonus: 强度增幅上限\n"
+            "# 需设置 result 为计算出的强度增幅值\n"
+            "\n"
+            " if mid_value <= 0 or lost_hp <= 0 or max_bonus <= 0:\n"
+            "     result = 0\n"
+            " else:\n"
+            "     r = min(lost_hp / mid_value, 1.0)\n"
+            "     if r < 0.1:\n"
+            "         result = max_bonus * 0.2\n"
+            "     elif r < 0.5:\n"
+            "         t = (r - 0.1) / 0.4\n"
+            "         result = max_bonus * (0.2 + t * 0.4)\n"
+            "     elif r < 1.0:\n"
+            "         t = (r - 0.5) / 0.5\n"
+            "         result = max_bonus * (0.6 + t * t * 0.6)\n"
+            "     else:\n"
+            "         result = max_bonus * 1.2\n"
+        )
+
+        code_edit = QPlainTextEdit()
+        code_edit.setPlainText(current_script if current_script else default_script)
+        font = QFont("Consolas", 10)
+        font.setStyleHint(QFont.StyleHint.Monospace)
+        code_edit.setFont(font)
+        code_edit.setStyleSheet("QPlainTextEdit { background-color: #1A1B1D; color: #d4d4d4; }")
+        highlighter = PythonSyntaxHighlighter(code_edit.document())
+        code_edit.highlighter = highlighter
+        code_edit.moveCursor(QTextCursor.MoveOperation.Start)
+        layout.addWidget(code_edit)
+
+        btn_layout = QHBoxLayout()
+        ok_btn = QPushButton("确定")
+        cancel_btn = QPushButton("取消")
+        btn_layout.addStretch()
+        btn_layout.addWidget(ok_btn)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        ok_btn.clicked.connect(dialog.accept)
+        cancel_btn.clicked.connect(dialog.reject)
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            new_script = code_edit.toPlainText()
+            self.set_config_value("damage_detect.script", new_script)
+
+    def _sample_key(self, line_edit):
+        from keycodes import capture_next_key, vk_to_name
+        self.status_label.setText("状态: 请按下要采样的按键 (5秒超时)...")
+        QApplication.processEvents()
+        vk, name = capture_next_key(timeout_sec=5)
+        if name:
+            line_edit.setText(name)
+            self.status_label.setText(f"状态: 已采样按键: {name}")
+        else:
+            self.status_label.setText("状态: 采样超时")
 
     def import_preset_config(self):
         preset_dir = os.path.join(_plugin_dir, '预制采样配置-使用配置工具读取')
@@ -4087,6 +4507,31 @@ class ConfigTool(QMainWindow):
                     preset_config = json.load(f)
 
                 plugins_preset = preset_config.get('config', {}).get('plugins', {})
+
+                import copy
+                from config import _deep_merge, _DEFAULTS
+
+                def _deep_fill_for_import(target, defaults):
+                    for key, default_val in defaults.items():
+                        if key not in target:
+                            target[key] = copy.deepcopy(default_val)
+                        elif isinstance(default_val, dict) and isinstance(target.get(key), dict):
+                            _deep_fill_for_import(target[key], default_val)
+
+                removed_keys = []
+                for section, defaults in _DEFAULTS.items():
+                    if section not in plugins_preset:
+                        continue
+                    preset_section = plugins_preset[section]
+                    if isinstance(preset_section, dict) and isinstance(defaults, dict):
+                        for key in list(defaults.keys()):
+                            if isinstance(defaults[key], dict):
+                                for sub_key in defaults[key]:
+                                    if sub_key not in preset_section.get(key, {}):
+                                        removed_keys.append(f"{section}.{key}.{sub_key}")
+                            elif key not in preset_section:
+                                removed_keys.append(f"{section}.{key}")
+
                 import_options = QMessageBox.question(
                     self, "导入选项",
                     "要导入全部配置还是仅导入采样点位置和颜色？",
@@ -4095,7 +4540,16 @@ class ConfigTool(QMainWindow):
                 )
 
                 if import_options == QMessageBox.StandardButton.Yes:
-                    self.config['plugins'].update(plugins_preset)
+                    import copy
+                    preset_with_defaults = copy.deepcopy(plugins_preset)
+                    
+                    temp_config = {"plugins": preset_with_defaults}
+                    from config import _ensure_defaults
+                    temp_config = _ensure_defaults(temp_config)
+                    preset_with_defaults = temp_config["plugins"]
+                    
+                    self.config['plugins'] = preset_with_defaults
+                    self.config['cfgFrom'] = file_path
                     waveform_preset = preset_config.get('config', {}).get('waveform', {})
                     if waveform_preset:
                         self.config['waveform'] = waveform_preset
@@ -4124,10 +4578,81 @@ class ConfigTool(QMainWindow):
                         if value is not None:
                             self.set_config_value(key, value)
 
+                if removed_keys:
+                    removed_list = "\n".join(f"• {k}" for k in removed_keys[:15])
+                    if len(removed_keys) > 15:
+                        removed_list += f"\n... 及其他共 {len(removed_keys)} 项"
+                    QMessageBox.information(
+                        self, "导入提示",
+                        f"以下配置项在预设配置中不存在，已自动填充默认值：\n\n{removed_list}"
+                    )
+
                 self.build_config_ui()
                 QMessageBox.information(self, "成功", "预制配置已导入，界面已刷新")
             except Exception as e:
                 QMessageBox.warning(self, "错误", f"导入失败: {e}")
+
+    def export_config(self):
+        def _clean_for_save(obj):
+            if isinstance(obj, dict):
+                return {k: _clean_for_save(v) for k, v in obj.items() if not k.startswith('_')}
+            elif isinstance(obj, list):
+                return [_clean_for_save(item) for item in obj]
+            return obj
+
+        cfg_from = self.config.get('cfgFrom', '')
+
+        if cfg_from and os.path.exists(cfg_from):
+            options = ["导出为JSON", "覆盖原先导入的文件", "删除导入文件来源", "取消"]
+            choice, ok = QInputDialog.getItem(
+                self, "导出配置",
+                f"检测到导入源配置文件:\n{cfg_from}\n\n请选择导出方式:",
+                options,
+                0,
+                False
+            )
+            if not ok or choice == "取消":
+                return
+
+            if choice == "导出为JSON":
+                file_path, _ = QFileDialog.getSaveFileName(
+                    self, "导出配置为JSON", "", "JSON 文件 (*.json)"
+                )
+                if file_path:
+                    save_data = {"config": _clean_for_save(self._get_export_data())}
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        json.dump(save_data, f, ensure_ascii=False, indent=4)
+                    QMessageBox.information(self, "成功", f"配置已导出到:\n{file_path}")
+
+            elif choice == "覆盖原先导入的文件":
+                try:
+                    save_data = {"config": _clean_for_save(self._get_export_data())}
+                    with open(cfg_from, 'w', encoding='utf-8') as f:
+                        json.dump(save_data, f, ensure_ascii=False, indent=4)
+                    QMessageBox.information(self, "成功", f"配置已覆盖到原文件:\n{cfg_from}")
+                except Exception as e:
+                    QMessageBox.warning(self, "错误", f"覆盖失败: {e}")
+
+            elif choice == "删除导入文件来源":
+                self.config.pop('cfgFrom', None)
+                self.build_config_ui()
+                QMessageBox.information(self, "成功", "已删除导入文件来源标记")
+
+        else:
+            file_path, _ = QFileDialog.getSaveFileName(
+                self, "导出配置为JSON", "", "JSON 文件 (*.json)"
+            )
+            if file_path:
+                save_data = {"config": _clean_for_save(self._get_export_data())}
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(save_data, f, ensure_ascii=False, indent=4)
+                QMessageBox.information(self, "成功", f"配置已导出到:\n{file_path}")
+
+    def _get_export_data(self):
+        import copy
+        data = copy.deepcopy(self.config)
+        data.pop('cfgFrom', None)
+        return data
 
     def on_process_title_changed(self, text):
         self.set_config_value("game.process_title", text)
@@ -4199,7 +4724,7 @@ class ConfigTool(QMainWindow):
             if not self.game_hwnd:
                 raise Exception(f"未找到游戏窗口 '{game_title}'")
 
-            result = lib.capture_screen_fast(hwnd=self.game_hwnd)
+            result = self._do_capture(hwnd=self.game_hwnd)
             if not result or len(result) < 6:
                 raise Exception("截图失败")
 
