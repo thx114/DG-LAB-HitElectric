@@ -276,8 +276,13 @@ def _bgra_to_array(bgra_data, width, height):
     if isinstance(bgra_data, np.ndarray):
         if bgra_data.shape == (height, width, 4):
             return bgra_data
+        if bgra_data.size != height * width * 4:
+            return np.zeros((height, width, 4), dtype=np.uint8)
         return bgra_data.reshape(height, width, 4).copy()
-    return np.frombuffer(bgra_data, dtype=np.uint8).reshape(height, width, 4).copy()
+    arr = np.frombuffer(bgra_data, dtype=np.uint8)
+    if arr.size != height * width * 4:
+        return np.zeros((height, width, 4), dtype=np.uint8)
+    return arr.reshape(height, width, 4).copy()
 
 
 def _np_replace_color(arr, target_colors, tolerance, feather=0):
@@ -485,7 +490,10 @@ def create_png_from_bgra(bgra_data, width, height):
 
     signature = b'\x89PNG\r\n\x1a\n'
     ihdr = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
-    arr = np.frombuffer(bgra_data, dtype=np.uint8).reshape(height, width, 4)
+    arr = np.frombuffer(bgra_data, dtype=np.uint8)
+    if arr.size != height * width * 4:
+        return b''
+    arr = arr.reshape(height, width, 4)
     rgba = arr[:, :, [2, 1, 0, 3]].copy()
     raw_rows = bytearray()
     for y in range(height):

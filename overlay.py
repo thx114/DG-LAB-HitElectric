@@ -56,10 +56,10 @@ class OverlayWindow:
         main_frame = tk.Frame(self.root, bg='black')
         main_frame.pack(fill=tk.X, anchor='w')
 
-        self._top_canvas = tk.Canvas(main_frame, width=1000, height=22, bg='black', highlightthickness=0)
+        self._top_canvas = tk.Canvas(main_frame, width=1100, height=22, bg='black', highlightthickness=0)
         self._top_canvas.pack(fill=tk.X, anchor='w')
 
-        self._bottom_canvas = tk.Canvas(main_frame, width=1000, height=28, bg='black', highlightthickness=0)
+        self._bottom_canvas = tk.Canvas(main_frame, width=1100, height=28, bg='black', highlightthickness=0)
         self._bottom_canvas.pack(fill=tk.X, anchor='w')
 
         self._top_layout = [
@@ -70,7 +70,8 @@ class OverlayWindow:
             ("shield", 240),
             ("delay", 310),
             ("strength", 650),
-            ("debug", 850),
+            ("overlap", 850),
+            ("debug", 920),
         ]
 
         self.gs.overlay_hwnd = self.root
@@ -193,6 +194,7 @@ class OverlayWindow:
                 "shield": f"盾:{shield_val}",
                 "delay": delay_str,
                 "strength": strength_str,
+                "overlap": f"ovlp:{overlap.accumulated:.1f}",
                 "debug": debug_str,
             }
 

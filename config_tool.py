@@ -4385,9 +4385,11 @@ class ConfigTool(QMainWindow):
         dialog.setMinimumSize(500, 350)
         layout = QVBoxLayout(dialog)
 
-        hint_label = QLabel("可用变量: accumulated(当前累加值), strength_max(最大强度), strength_add(每次增加)\n"
+        hint_label = QLabel("⚠ 每帧调用（约10次/秒），请用 dt 计算时间相关逻辑\n"
+                           "可用变量: accumulated(当前累加值), strength_max(最大强度), strength_add(每次增加)\n"
+                           "           dt(距上次调用秒数), now(当前时间)\n"
                            "           initial_overlap_time(最初叠加时间), overlap_count(叠加次数)\n"
-                           "           last_overlap_time(最后叠加时间), now(当前时间)\n"
+                           "           last_overlap_time(最后叠加时间)\n"
                            "可用函数: max, min, abs, int, float, round\n"
                            "需设置 accumulated 为新值")
         hint_label.setStyleSheet("color: #888; font-size: 11px;")

@@ -66,14 +66,10 @@
                                 187
                             ]
                         ]
-                    },
-                    {
-                        "type": "dilate",
-                        "iterations": 1
                     }
                 ],
                 "ocr_api_ip": "",
-                "ocr_api_data": ""
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "shield_bar": {
                 "enabled": true,
@@ -113,15 +109,11 @@
                                 255
                             ]
                         ]
-                    },
-                    {
-                        "type": "dilate",
-                        "iterations": 1
                     }
                 ],
                 "drop_threshold": 0,
                 "ocr_api_ip": "",
-                "ocr_api_data": ""
+                "ocr_api_data": "{\"ocr.language\": \"models/config_en.txt\", \"ocr.cls\": false, \"ocr.limit_side_len\": 960, \"tbpu.parser\": \"none\", \"data.format\": \"text\"}"
             },
             "overlay": {
                 "enabled": true
@@ -176,6 +168,8 @@
             "shield_pulse": [
                 "0A0A0A0A50505050",
                 "0A0A0A0A50505050",
+                "0A0A0A0A28282828",
+                "0A0A0A0A28282828",
                 "0A0A0A0A28282828",
                 "0A0A0A0A0A0A0A0A"
             ]

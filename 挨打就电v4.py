@@ -696,15 +696,13 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
     pulse_duration = get_pulse_duration(pulse_data)
 
     # Overlap 处理
-    overlap_processor.reset_if_expired(now)
-    overlap_processor.apply_decay(now)
     base_strength = gs.strength_values.get(f"{pulse_type}_a", 20)
     overlap_add, total_add, proximity, damage_bonus = overlap_processor.compute(
-        now, base_strength, damage_bonus
+        now, base_strength, damage_bonus, pulse_duration
     )
 
-    # 如果 overlap 启用且在基础时间内，清除脉冲
-    if overlap_processor.is_overlap(now) and gs.cached_config.get("overlap_enabled", True):
+    # 如果 overlap 启用且在基础脉冲时间内，清除脉冲（不重复发送）
+    if now < overlap_processor.base_until and gs.cached_config.get("overlap_enabled", True):
         _clear_pluses("All")
 
     overlap_max = gs.cached_config.get("overlap_strength_max", 200)
@@ -742,9 +740,6 @@ async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", da
     # 发送脉冲
     _send_pluses(pulse_data, "All", 1)
     gs.current_electric_strength = max(strength_a, strength_b)
-
-    # 更新 overlap 时间
-    overlap_processor.update_timing(now, pulse_duration, proximity)
 
     await asyncio.sleep(0.05)
     gs.current_electric_strength = 0
@@ -973,6 +968,11 @@ async def monitoring_loop():
             await _process_frame(capture_region)
         except Exception as e:
             log(f"检测出错: {e}")
+
+        # 持续处理 overlap 回落
+        now = time.time()
+        overlap_processor.reset_if_expired(now)
+        overlap_processor.apply_decay(now)
 
         # 更新悬浮窗
         frame_counter += 1

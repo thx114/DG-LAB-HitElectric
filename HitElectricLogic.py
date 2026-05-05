@@ -109,10 +109,11 @@ class OverlapProcessor:
         self._initial_overlap_time = 0.0
         self._last_overlap_time = 0.0
         self._overlap_count = 0
+        self._last_decay_time = 0.0
 
     def reset_if_expired(self, now):
-        """如果不在 overlap 时间内，根据回落模式处理累加值"""
-        if now >= self.base_until:
+        """如果不在 overlap 窗口内，根据回落模式处理累加值"""
+        if now >= self.active_until:
             if not self._cfg("overlap_decay_enabled", False):
                 self.accumulated = 0
                 self._initial_overlap_time = 0.0
@@ -134,23 +135,32 @@ class OverlapProcessor:
                 self._overlap_count = 0
 
     def apply_decay(self, now):
-        """在每帧调用，处理自然回落"""
+        """在每帧调用，处理自然回落（基于实际时间差计算）"""
         if not self._cfg("overlap_decay_enabled", False):
             return
         if self.accumulated <= 0:
             return
-        if now < self.base_until:
+        if now < self.active_until:
+            self._last_decay_time = now
             return
+
+        if self._last_decay_time <= 0:
+            self._last_decay_time = now
+        dt = now - self._last_decay_time
+        if dt <= 0:
+            return
+        self._last_decay_time = now
 
         mode = self._cfg("overlap_decay_mode", "instant")
         if mode == "instant":
             self.accumulated = 0
         elif mode == "linear":
             decay_val = self._cfg("overlap_decay_value", 1)
-            self.accumulated = max(0, self.accumulated - decay_val)
+            self.accumulated = max(0, self.accumulated - decay_val * dt)
         elif mode == "percent":
             decay_pct = self._cfg("overlap_decay_percent", 10)
-            self.accumulated = max(0, self.accumulated * (1 - decay_pct / 100.0))
+            factor = (1 - decay_pct / 100.0) ** dt
+            self.accumulated = max(0, self.accumulated * factor)
             if self.accumulated < 0.5:
                 self.accumulated = 0
         elif mode == "ratio_accel":
@@ -158,14 +168,14 @@ class OverlapProcessor:
             accel_factor = self._cfg("overlap_decay_ratio_accel", 0.5)
             if overlap_max > 0:
                 ratio = self.accumulated / overlap_max
-                decay_amount = max(0.1, ratio * accel_factor * overlap_max * 0.05)
-                self.accumulated = max(0, self.accumulated - decay_amount)
+                decay_per_sec = max(0.1, ratio * accel_factor * overlap_max * 0.05)
+                self.accumulated = max(0, self.accumulated - decay_per_sec * dt)
             else:
                 self.accumulated = 0
         elif mode == "script":
-            self._run_decay_script()
+            self._run_decay_script(now, dt)
 
-    def _run_decay_script(self):
+    def _run_decay_script(self, now, dt):
         script = self._cfg("overlap_decay_script", "")
         if not script:
             self.accumulated = 0
@@ -184,6 +194,7 @@ class OverlapProcessor:
                 "overlap_count": self._overlap_count,
                 "last_overlap_time": self._last_overlap_time,
                 "now": now,
+                "dt": dt,
             }
             exec(script, {"__builtins__": safe_builtins}, local_vars)
             result = local_vars.get("accumulated", 0)
@@ -193,12 +204,15 @@ class OverlapProcessor:
 
     def is_overlap(self, now):
         if self._cfg("overlap_decay_enabled", False):
-            return self.accumulated > 0
-        return now < self.base_until
+            return self.accumulated > 0 or now < self.active_until
+        return now < self.active_until or self.active_until == 0.0
 
-    def compute(self, now, base_strength, damage_bonus):
+    def compute(self, now, base_strength, damage_bonus, pulse_duration=0):
         """
         计算 overlap 叠加
+
+        Args:
+            pulse_duration: 当前脉冲时长，用于自动更新 base_until
 
         Returns:
             (overlap_add, total_add, proximity, damage_bonus_after_weaken)
@@ -210,7 +224,8 @@ class OverlapProcessor:
         total_add = damage_bonus
         overlap_add = 0
 
-        if self.is_overlap(now) and self._cfg("overlap_enabled", True):
+        in_overlap = self.is_overlap(now)
+        if in_overlap and self._cfg("overlap_enabled", True):
             overlap_add_base = self._cfg("overlap_strength_add", 1)
             overlap_add = overlap_add_base * (1.0 - proximity)
             self.accumulated += overlap_add
@@ -219,6 +234,9 @@ class OverlapProcessor:
                 self._initial_overlap_time = now
             self._last_overlap_time = now
             self._overlap_count += 1
+
+        if pulse_duration > 0:
+            self.update_timing(now, pulse_duration, proximity)
 
         damage_bonus_out = damage_bonus
         if self._cfg("damage_enabled", False) and damage_bonus > 0:
