@@ -288,6 +288,17 @@ class Config:
         self._cache = {}
         self._build_cache()
 
+    def load_from_dict(self, data):
+        self._config_path = None
+        if isinstance(data, dict):
+            if "config" in data:
+                data = data["config"]
+            self._data = _deep_merge(_DEFAULTS, data)
+            self._data = _migrate_legacy_filters(self._data)
+            self._data = _ensure_defaults(self._data)
+        self._cache = {}
+        self._build_cache()
+
     def save(self, config_path=None):
         path = config_path or self._config_path
         if not path:

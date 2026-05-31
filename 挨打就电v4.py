@@ -36,8 +36,7 @@ author = "F_thx"
 # 全局状态
 # ============================================================
 
-class GlobalState:
-    """全局状态容器，减少散落的全局变量"""
+class App:
 
     def __init__(self):
         self.base_dir = None
@@ -110,7 +109,7 @@ class GlobalState:
         self.last_loop_time = 0
 
 
-gs = GlobalState()
+gs = App()
 
 # 模块实例 (在 main 中初始化)
 damage_detector = None
@@ -409,21 +408,35 @@ kernel32 = ctypes.windll.kernel32
 # 日志
 # ============================================================
 
+_LOG_LEVEL_MAP = {
+    "SUCCESS": "success",
+    "INFO": "info",
+    "WARNING": "warning",
+    "WARN": "warning",
+    "ERROR": "error",
+    "DEBUG": "debug",
+}
+
+
 def log(msg_a, lvl="INFO"):
     message = '[挨打就电]: {}'.format(msg_a)
-    if gs.server is not None and hasattr(gs.server, 'logger'):
+    log_type = _LOG_LEVEL_MAP.get(lvl, "info")
+    if gs.logger is not None:
         try:
-            logger = gs.server.logger
-            if lvl == "SUCCESS": logger.success(message)
-            elif lvl == "INFO": logger.info(message)
-            elif lvl == "WARNING": logger.warn(message)
-            elif lvl == "ERROR": logger.error(message)
-            elif lvl == "DEBUG": logger.debug(message)
+            if lvl == "SUCCESS": gs.logger.success(message)
+            elif lvl == "INFO": gs.logger.info(message)
+            elif lvl == "WARNING": gs.logger.warn(message)
+            elif lvl == "ERROR": gs.logger.error(message)
+            elif lvl == "DEBUG": gs.logger.debug(message)
             return
         except Exception:
             pass
-    if gs.msg_queue is not None:
-        gs.msg_queue.put({'action': "logger", 'log_level': lvl, 'message': message})
+    if gs.server is not None:
+        try:
+            gs.server.log(log_type, message)
+            return
+        except Exception:
+            pass
 
 
 def debug(msg_a):
@@ -668,25 +681,44 @@ def check_health_and_shield(bmp_data, img_width):
 # ============================================================
 
 def _send_set_strength(channel, strength):
-    if gs.server is not None and hasattr(gs.server, 'set_strength'):
-        gs.server.set_strength(channel, strength)
-    elif gs.msg_queue:
-        gs.msg_queue.put({'action': "set_strength", 'channel': channel, 'strength': strength})
+    if gs.server is not None:
+        gs.server.set_strength(strength, channel=channel)
+
+
+def _hex_pulse_to_pair(hex_str):
+    freq = int(hex_str[0:2], 16)
+    strength = int(hex_str[8:10], 16)
+    return [freq, strength]
+
+
+def _convert_pulse_data(pulse_data):
+    if isinstance(pulse_data, list):
+        result = []
+        for pulse in pulse_data:
+            if isinstance(pulse, str) and len(pulse) == 16:
+                result.append(_hex_pulse_to_pair(pulse))
+            elif isinstance(pulse, list) and len(pulse) == 2:
+                result.append(pulse)
+            else:
+                result.append(pulse)
+        return result
+    elif isinstance(pulse_data, str) and len(pulse_data) == 16:
+        return [_hex_pulse_to_pair(pulse_data)]
+    return pulse_data
 
 
 def _send_pluses(pulse_data, channel, punish_time):
-    if gs.server is not None and hasattr(gs.server, 'send_pluses_message'):
-        gs.server.send_pluses_message(pulse_data, channel, punish_time)
-    elif gs.msg_queue:
-        pluses_str = str(pulse_data) if isinstance(pulse_data, list) else pulse_data
-        gs.msg_queue.put({'action': "send_pluses", 'pluses': pluses_str, 'punish_time': punish_time, 'channel': channel})
+    if gs.server is not None:
+        pulse_data = _convert_pulse_data(pulse_data)
+        # 转换后是 [[10, 80], [10, 80], [10, 40], [10, 40], [10, 40], [10, 10]]
+
+        log(f"server 发送脉冲: {pulse_data} 到通道 {channel}，惩罚时间 {punish_time}")
+        gs.server.send_waveform(waveform=pulse_data, channel=channel)
 
 
 def _clear_pluses(channel="All"):
-    if gs.server is not None and hasattr(gs.server, 'clear_pluses'):
-        gs.server.clear_pluses(channel)
-    elif gs.msg_queue:
-        gs.msg_queue.put({'action': "clear_pluses", 'channel': channel})
+    if gs.server is not None:
+        gs.server.clear_waveform(channel=channel)
 
 
 async def trigger_electric(strength_a=20, strength_b=20, pulse_type="health", damage_bonus=0):
@@ -1353,21 +1385,23 @@ def take_debug_screenshots():
 # 入口
 # ============================================================
 
-async def main(put_server, data, loggerr=None):
+async def main(data):
     global damage_detector, overlap_processor, trigger_conditions, ocr_validator
     global key_monitor_thread
 
-    gs.server = put_server
-    gs.logger = loggerr
+    gs.server = data.server
+    gs.logger = data.logger
     gs.base_dir = _plugin_dir
-    gs.msg_queue = None if hasattr(put_server, 'set_strength') else put_server
-    if gs.msg_queue is not None:
-        gs.server = None
+    gs.msg_queue = None
     gs.stop_event = asyncio.Event()
     gs.main_loop = asyncio.get_event_loop()
 
-    config_path = os.path.join(_plugin_dir, "config.json")
-    gs.cfg.load(config_path)
+    config_data = data.config
+    if config_data and isinstance(config_data, dict) and ("plugins" in config_data or "waveform" in config_data):
+        gs.cfg.load_from_dict(config_data)
+    else:
+        config_path = os.path.join(_plugin_dir, "config.json")
+        gs.cfg.load(config_path)
 
     gs.config = gs.cfg.plugins
     gs.cached_config = gs.cfg._cache
@@ -1481,12 +1515,17 @@ async def main(put_server, data, loggerr=None):
         log("监听已关闭")
 
 
-async def stop():
+def stop():
     gs.is_monitoring = False
     if gs.stop_event:
-        gs.stop_event.set()
-        lib.release_dxgi()
-        log("监听已关闭")
+        try:
+            if gs.main_loop and gs.main_loop.is_running():
+                gs.main_loop.call_soon_threadsafe(gs.stop_event.set)
+            else:
+                gs.stop_event.set()
+        except RuntimeError:
+            gs.stop_event.set()
+    lib.release_dxgi()
 
 
 if __name__ == "__main__":
