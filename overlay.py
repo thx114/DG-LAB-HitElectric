@@ -7,6 +7,7 @@ overlay.py - 悬浮窗模块
 - tkinter 无边框置顶透明窗口
 - 白色文字 + 右下阴影描边
 - 尝试加载 HarmonyOS Sans 字体
+- 支持暂停/恢复，stop 时隐藏不销毁，避免 tkinter 后台线程重复创建问题
 """
 
 import tkinter as tk
@@ -35,6 +36,7 @@ class OverlayWindow:
         self._get_overlap = get_overlap_processor
         self.root = None
         self.visible = True
+        self._paused = False
         self._bottom_canvas = None
         self._trigger_message = ""
         self._trigger_show_until = 0
@@ -44,6 +46,7 @@ class OverlayWindow:
         self._setting_event = setting_event
         self._stop_event = stop_event
         self._log = on_log or print
+        self._paused = False
 
         self.root = tk.Tk()
         self.root.title("HitElectric")
@@ -87,13 +90,35 @@ class OverlayWindow:
         finally:
             self.gs.overlay_hwnd = None
 
+    def resume(self, toggle_event, setting_event, stop_event, on_log=None):
+        self._toggle_event = toggle_event
+        self._setting_event = setting_event
+        self._stop_event = stop_event
+        if on_log:
+            self._log = on_log
+        self._paused = False
+        self.visible = True
+        try:
+            self.root.deiconify()
+            self._refresh()
+            self.root.after(80, self._update_loop)
+        except Exception:
+            pass
+
     def _update_loop(self):
         try:
             if self._stop_event.is_set():
-                try:
-                    self.root.destroy()
-                except Exception:
-                    pass
+                if not self._paused:
+                    self._paused = True
+                    try:
+                        self.root.withdraw()
+                    except Exception:
+                        pass
+                self.root.after(200, self._update_loop)
+                return
+
+            if self._paused:
+                self.root.after(200, self._update_loop)
                 return
 
             try:

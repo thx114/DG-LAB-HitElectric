@@ -78,25 +78,7 @@ def init():
 
 
 def function_init():
-    global app
-    try:
-        if app.flask_app:
-            app.flask_app.add_url_rule(f'/plugins/{plugin_name}/save', view_func=save)
-            app.flask_app.add_url_rule(f'/plugins/{plugin_name}/reload', view_func=reload_config)
-        return "success"
-    except Exception as e:
-        if app.server:
-            app.server.log("error", f"function_init错误: {e}")
-        return str(e)
-
-
-def save():
-    return json.dumps({"message": "保存成功"})
-
-
-def reload_config():
-    挨打就电v4.trigger_config_reload()
-    return json.dumps({"message": "配置重载已触发"})
+    return "success"
 
 
 def ui_init():
@@ -171,10 +153,24 @@ try{{
 
 
 def start():
-    asyncio.run(挨打就电v4.main(app))
+    try:
+        app.logger.info(f"{plugin_name} start() 被调用")
+        asyncio.run(挨打就电v4.main(app))
+    except Exception as e:
+        error_detail = traceback.format_exc()
+        print(f"\n==================== {plugin_name} start() 异常 ====================")
+        print(f"错误信息：{str(e)}")
+        print(f"详细堆栈：\n{error_detail}")
+        print("==============================================================\n")
+        try:
+            app.logger.error(f"start()异常: {str(e)}")
+        except Exception:
+            pass
 
 
 def stop():
+    if 挨打就电v4.gs.stop_event:
+        挨打就电v4.gs.stop_event.set()
     try:
         挨打就电v4.stop()
     except Exception:

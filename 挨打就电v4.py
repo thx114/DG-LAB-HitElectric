@@ -1310,6 +1310,7 @@ def key_monitor_loop():
 overlay_event = threading.Event()
 overlay_visible = True
 _overlay_window = None
+_overlay_thread = None
 
 
 def _get_monitoring_attrs():
@@ -1327,6 +1328,18 @@ def _get_monitoring_attrs():
 
 def create_overlay_window():
     global _overlay_window
+    if _overlay_window is not None and _overlay_window.root is not None:
+        try:
+            _overlay_window.resume(
+                toggle_event=overlay_event,
+                setting_event=gs.setting_event,
+                stop_event=gs.stop_event,
+                on_log=log,
+            )
+            log("悬浮窗已恢复")
+            return
+        except Exception:
+            _overlay_window = None
     _overlay_window = OverlayWindow(gs, _get_monitoring_attrs, lambda: overlap_processor)
     _overlay_window.create(
         toggle_event=overlay_event,
@@ -1393,7 +1406,7 @@ async def main(data):
     gs.logger = data.logger
     gs.base_dir = _plugin_dir
     gs.msg_queue = None
-    gs.stop_event = asyncio.Event()
+    gs.stop_event = threading.Event()
     gs.main_loop = asyncio.get_event_loop()
 
     config_data = data.config
@@ -1495,9 +1508,22 @@ async def main(data):
 
     overlay_enabled = gs.config.get("overlay", {}).get("enabled", True)
     if overlay_enabled:
-        overlay_thread = threading.Thread(target=create_overlay_window, daemon=True)
-        overlay_thread.start()
-        log("悬浮窗已启动 (F6切换显示, F10设置模式)")
+        global _overlay_thread
+        overlay_event.clear()
+        gs.overlay_update_event.clear()
+        gs.setting_event.clear()
+        if _overlay_window is not None and _overlay_window.root is not None and _overlay_thread is not None and _overlay_thread.is_alive():
+            _overlay_window.resume(
+                toggle_event=overlay_event,
+                setting_event=gs.setting_event,
+                stop_event=gs.stop_event,
+                on_log=log,
+            )
+            log("悬浮窗已恢复 (F6切换显示, F10设置模式)")
+        else:
+            _overlay_thread = threading.Thread(target=create_overlay_window, daemon=True)
+            _overlay_thread.start()
+            log("悬浮窗已启动 (F6切换显示, F10设置模式)")
     else:
         log("悬浮窗已禁用")
 
@@ -1512,20 +1538,14 @@ async def main(data):
         gs.is_monitoring = False
         monitoring_task.cancel()
         gs.stop_event.set()
+        lib.release_dxgi()
         log("监听已关闭")
 
 
 def stop():
     gs.is_monitoring = False
     if gs.stop_event:
-        try:
-            if gs.main_loop and gs.main_loop.is_running():
-                gs.main_loop.call_soon_threadsafe(gs.stop_event.set)
-            else:
-                gs.stop_event.set()
-        except RuntimeError:
-            gs.stop_event.set()
-    lib.release_dxgi()
+        gs.stop_event.set()
 
 
 if __name__ == "__main__":
